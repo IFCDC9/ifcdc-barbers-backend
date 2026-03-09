@@ -4,9 +4,9 @@ const express = require("express");
 const cors = require("cors");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
-const pool = require("./db");
-const authRoutes = require("./routes/auth");
-const appointmentRoutes = require("./routes/appointments");
+const pool = require("../db");
+const authRoutes = require("../routes/auth");
+const appointmentRoutes = require("../routes/appointments");
 
 const app = express();
 const PORT = 5000;
