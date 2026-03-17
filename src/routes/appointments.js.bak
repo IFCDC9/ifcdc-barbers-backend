@@ -1,0 +1,42 @@
+import express from"express";
+const router = express.Router();
+
+import db from "../db/db.js";
+
+
+
+
+/* =========================
+   GET ALL BOOKINGS
+========================= */
+
+router.get("/", (req, res) => {
+
+  res.json({
+    message: "Appointments route active",
+    bookings: []
+  })
+
+})
+
+/* =========================
+   CREATE BOOKING
+========================= */
+
+router.post("/create", (req, res) => {
+
+  const { barber_id, customer_name, service, appointment_time } = req.body
+
+  res.json({
+    message: "Booking created",
+    data: {
+      barber_id,
+      customer_name,
+      service,
+      appointment_time
+    }
+  })
+
+})
+
+export default router

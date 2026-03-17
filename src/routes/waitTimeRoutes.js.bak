@@ -1,0 +1,54 @@
+import express from"express";
+const router = express.Router();
+
+import db from "../db/db.js";
+
+/*
+================================
+ESTIMATE WAIT TIME
+GET /api/wait-time/:barberId
+================================
+*/
+
+router.get("/:barberId", async (req, res) => {
+
+  const { barberId } = req.params;
+
+  try {
+
+    // How many people are waiting for this barber
+    const queue = await db.query(
+      `SELECT COUNT(*) AS people_waiting
+       FROM queue
+       WHERE barber_id = $1`,
+      [barberId]
+    );
+
+    const peopleWaiting = Number(queue.rows[0].people_waiting);
+
+    // Average haircut time in minutes (can adjust later)
+    const avgCutTime = 20;
+
+    const estimatedWait = peopleWaiting * avgCutTime;
+
+    res.json({
+      success: true,
+      barberId,
+      peopleAhead: peopleWaiting,
+      estimatedWaitMinutes: estimatedWait
+    });
+
+  } catch (error) {
+
+    console.error("Wait time error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Failed to calculate wait time"
+    });
+
+  }
+
+});
+
+export default router

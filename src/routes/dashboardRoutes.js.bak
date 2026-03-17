@@ -1,0 +1,58 @@
+import express from"express";
+const router = express.Router();
+
+import db from "../../db/db.js"
+
+/*
+================================
+SHOP DASHBOARD
+GET /api/dashboard
+================================
+*/
+
+router.get("/", async (req, res) => {
+
+  try {
+
+    // Current queue
+    const queue = await db.query(
+      "SELECT * FROM queue ORDER BY created_at ASC"
+    );
+
+    // Barber statuses
+    const barberStatus = await db.query(
+      "SELECT * FROM barber_status ORDER BY updated_at DESC"
+    );
+
+    // Queue count
+    const queueCount = queue.rows.length;
+
+    // Average haircut time
+    const avgCutTime = 20;
+
+    const estimatedWait = queueCount * avgCutTime;
+
+    res.json({
+      success: true,
+      dashboard: {
+        queue: queue.rows,
+        barberStatus: barberStatus.rows,
+        queueCount: queueCount,
+        estimatedWaitMinutes: estimatedWait
+      }
+    });
+
+  } catch (error) {
+
+    console.error("Dashboard error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Failed to load dashboard"
+    });
+
+  }
+
+});
+
+export default router

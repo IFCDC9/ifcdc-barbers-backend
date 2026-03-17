@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>IFCDC Admin Dashboard</title>
+  <style>
+    body {
+      font-family: Arial;
+      <!DOCTYPE html>
+      <html lang="en">
+      <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>IFCDC Admin Dashboard</title>
+        <style>
+          body {
+            font-family: Arial, sans-serif;
+            background: #111;
+            color: #fff;
+            padding: 20px;
+            margin: 0;
+          }
+
+          h1 {
+            color: gold;
+            margin-bottom: 10px;
+          }
+
+          .topbar {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+          }
+
+          input {
+            padding: 10px;
+            border: 1px solid #444;
+            background: #1c1c1c;
+            color: white;
+            border-radius: 6px;
+            min-width: 320px;
+          }
+
+          button {
+            padding: 10px 16px;
+            border: none;
+            background: gold;
+            color: black;
+            font-weight: bold;
+            border-radius: 6px;
+            cursor: pointer;
+          }
+
+          .cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+          }
+
+          .card {
+            background: #1b1b1b;
+            border: 1px solid #333;
+            border-radius: 10px;
+            padding: 16px;
+          }
+
+          .card h3 {
+            margin: 0 0 8px;
+            color: gold;
+            font-size: 14px;
+            text-transform: uppercase;
+          }
+
+          .card p {
+            margin: 0;
+            font-size: 24px;
+            font-weight: bold;
+          }
+
+          table {
+            width: 100%;
+            border-collapse: collapse;
+            background: #1b1b1b;
+            border: 1px solid #333;
+          }
+
+          th, td {
+            padding: 12px;
+            border: 1px solid #333;
+            text-align: center;
+            font-size: 14px;
+          }
+
+          th {
+            background: #222;
+            color: gold;
+          }
+
+          .confirmed {
+            color: lime;
+            font-weight: bold;
+          }
+
+          .pending {
+            color: orange;
+            font-weight: bold;
+          }
+
+          .error {
+            color: #ff6b6b;
+            margin: 10px 0 20px;
+          }
+        </style>
+      </head>
+      <body>
+        <h1>IFCDC Admin Dashboard</h1>
+
+        <div class="topbar">
+          <input
+            type="password"
+            id="adminKey"
+            placeholder="Enter admin secret"
+          />
+          <button onclick="loadDashboard()">Load Dashboard</button>
+        </div>
+
+        <div id="errorBox" class="error"></div>
+
+        <div class="cards">
+          <div class="card">
+            <h3>Total Bookings</h3>
+            <p id="totalBookings">0</p>
+          </div>
+          <div class="card">
+            <h3>Confirmed</h3>
+            <p id="confirmedBookings">0</p>
+          </div>
+          <div class="card">
+            <h3>Pending</h3>
+            <p id="pendingBookings">0</p>
+          </div>
+          <div class="card">
+            <h3>Total Revenue</h3>
+            <p id="totalRevenue">$0</p>
+          </div>
+        </div>
+
+        <table>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Phone</th>
+              <th>Email</th>
+              <th>Service</th>
+              <th>Date</th>
+              <th>Time</th>
+              <th>Status</th>
+              <th>Price</th>
+            </tr>
+          </thead>
+          <tbody id="bookingsTableBody"></tbody>
+        </table>
+
+        <script>
+          async function loadDashboard() {
+            const adminKey = document.getElementById("adminKey").value.trim();
+            const errorBox = document.getElementById("errorBox");
+            const tableBody = document.getElementById("bookingsTableBody");
+
+            errorBox.innerText = "";
+            tableBody.innerHTML = "";
+
+            if (!adminKey) {
+              errorBox.innerText = "Please enter your admin secret.";
+              return;
+            }
+
+            try {
+              const [summaryRes, bookingsRes] = await Promise.all([
+                fetch("http://localhost:3000/api/admin/summary", {
+                  headers: { "x-admin-key": adminKey }
+                }),
+                fetch("http://localhost:3000/api/admin/bookings", {
+                  headers: { "x-admin-key": adminKey }
+                })
+              ]);
+
+              if (!summaryRes.ok || !bookingsRes.ok) {
+                throw new Error("Access denied or server error.");
+              }
+
+              const summary = await summaryRes.json();
+              const bookings = await bookingsRes.json();
+
+              document.getElementById("totalBookings").innerText = summary.total_bookings || 0;
+              document.getElementById("confirmedBookings").innerText = summary.confirmed_bookings || 0;
+              document.getElementById("pendingBookings").innerText = summary.pending_bookings || 0;
+              document.getElementById("totalRevenue").innerText = `$${summary.total_revenue || 0}`;
+
+              bookings.forEach((b) => {
+                const row = `
+                  <tr>
+                    <td>${b.name || ""}</td>
+                    <td>${b.phone || ""}</td>
+                    <td>${b.email || ""}</td>
+                    <td>${b.service || ""}</td>
+                    <td>${b.date || ""}</td>
+                    <td>${b.time || ""}</td>
+                    <td class="${b.status || ""}">${b.status || ""}</td>
+                    <td>$${b.price || 0}</td>
+                  </tr>
+                `;
+                tableBody.innerHTML += row;
+              });
+            } catch (err) {
+              console.error("Dashboard load error:", err);
+              errorBox.innerText = "Could not load dashboard. Check your admin secret and server.";
+            }
+          }
+        </script>
+      </body>
+      </html>

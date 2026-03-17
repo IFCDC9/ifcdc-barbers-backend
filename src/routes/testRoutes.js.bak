@@ -1,0 +1,17 @@
+import express from"express";
+const router = express.Router();
+
+import db from "../../db/db.js"
+/* ========================
+   TEST API
+======================== */
+
+router.get("/", (req, res) => {
+  res.json({
+    status: "OK",
+    system: "IFCDC Barbers Backend",
+    message: "API running successfully"
+  })
+})
+
+export default router

@@ -4,16 +4,24 @@
   "description": "IFCDC Barbers Backend API",
   "main": "index.js",
   "scripts": {
+    "predev": "lsof -ti:3000 | xargs kill -9 2>/dev/null || true",
     "start": "node src/server.js",
-    "dev": "node index.js"
+    "dev": "nodemon src/server.js"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.99.1",
     "bcrypt": "^5.1.1",
     "cors": "^2.8.6",
     "dotenv": "^16.6.1",
     "express": "^4.22.1",
     "jsonwebtoken": "^9.0.3",
-    "pg": "^8.11.3"
+    "multer": "^2.1.1",
+    "openai": "^6.29.0",
+    "pg": "^8.20.0",
+    "sentiment": "^5.0.2",
+    "socket.io": "^4.8.3",
+    "twilio": "^5.13.0",
+    "ws": "^8.18.0"
   },
   "repository": {
     "type": "git",
@@ -22,9 +30,13 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "type": "commonjs",
+  "type": "module",
   "bugs": {
     "url": "https://github.com/IFCDC9/ifcdc-barbers-backend/issues"
   },
-  "homepage": "https://github.com/IFCDC9/ifcdc-barbers-backend#readme"
+  "homepage": "https://github.com/IFCDC9/ifcdc-barbers-backend#readme",
+  "devDependencies": {
+    "ngrok": "^5.0.0-beta.2",
+    "nodemon": "^3.1.14"
+  }
 }

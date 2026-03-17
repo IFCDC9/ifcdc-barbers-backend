@@ -1,159 +1,226 @@
-require("dotenv").config();
+/* ==========================================
+   IFCDC BARBERS PLATFORM SERVER
+========================================== */
 
-const express = require("express");
-const cors = require("cors");
-const bcrypt = require("bcrypt");
-const jwt = require("jsonwebtoken");
-const pool = require("../db");
-const authRoutes = require("../routes/auth");
-const appointmentRoutes = require("../routes/appointments");
+import "dotenv/config"
+import express from "express"
+import cors from "cors"
+import http from "http"
+import path from "path"
+import { fileURLToPath } from "url"
+import { Server } from "socket.io"
+import pool from "./db/db.js"
 
-const app = express();
-const PORT = 5000;
-
-console.log("Starting Express app...");
-
-/* ===============================
-   MIDDLEWARE
-================================ */
-app.use(cors());
-app.use(express.json());
-
-console.log("Middleware loaded...");
-
-/* ===============================
-   QUICK LOGIN TEST ROUTE
-================================ */
-app.get("/test-login", (req, res) => {
-  res.json({ message: "Test route working!" });
-});
-
-/* ===============================
+/* ==========================================
    ROUTES
-================================ */
-app.use("/auth", authRoutes);
-app.use("/appointments", appointmentRoutes);
+========================================== */
 
-/* ===============================
-   ROOT HEALTH CHECK
-================================ */
-app.get("/", (req, res) => {
-  console.log("Root route called");
+import dashboardRoutes from "./routes/dashboardRoutes.js"
+import queueRoutes from "./routes/queueRoutes.js"
+import barberStatusRoutes from "./routes/barberStatusRoutes.js"
+import checkinRoutes from "./routes/checkinRoutes.js";
+import earningsRoutes from "./routes/earningsRoutes.js"
+import tipsRoutes from "./routes/tipsRoutes.js"
+import waitTimeRoutes from "./routes/waitTimeRoutes.js"
+import appointmentRoutes from "./routes/appointments.js"
+import testRoutes from "./routes/testRoutes.js"
+import voiceRoutes from "./routes/voiceRoutes.js";
+import bookingRoutes from "./routes/bookingRoutes.js"
+import paypalRoutes from "./routes/paypalRoutes.js"
+import adminRoutes from "./routes/adminRoutes.js"
+import { attachTwilioRealtimeBridge } from "./services/realtimeVoice.js"
+
+const app = express()
+const server = http.createServer(app)
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
+
+app.set("trust proxy", true)
+
+const io = new Server(server, {
+  cors: {
+    origin: "*"
+  }
+})
+
+attachTwilioRealtimeBridge({
+  server,
+  path: "/api/voice/media-stream"
+})
+
+/* ==========================================
+   MIDDLEWARE
+========================================== */
+
+app.use(cors())
+app.use(express.json())
+app.use(express.urlencoded({ extended: true }))
+app.use("/admin", express.static(path.join(__dirname, "public")))
+
+/* ==========================================
+   DATABASE CONNECTION
+========================================== */
+
+pool.connect()
+  .then((client) => {
+    client.release()
+    console.log("✅ IFCDC Database Connected")
+  })
+  .catch(err => {
+    console.error("❌ Database connection error:", err)
+  })
+
+/* ==========================================
+   SOCKET.IO REALTIME ENGINE
+========================================== */
+
+io.on("connection", (socket) => {
+
+  console.log("⚡ Client connected")
+
+  socket.on("joinBarberRoom", (barberId) => {
+    socket.join(`barber-${barberId}`)
+  })
+
+  socket.on("disconnect", () => {
+    console.log("Client disconnected")
+  })
+
+})
+
+/* ==========================================
+   API ROUTES
+========================================== */
+
+app.use("/api/dashboard", dashboardRoutes)
+app.use("/api/queue", queueRoutes)
+app.use("/api/barber-status", barberStatusRoutes)
+app.use("/api", checkinRoutes);
+
+/* Booking System */
+app.use("/api/bookings", bookingRoutes)
+app.use("/api/appointments", appointmentRoutes)
+app.use("/api/paypal", paypalRoutes)
+
+/* Financial System */
+app.use("/api/earnings", earningsRoutes)
+app.use("/api/tips", tipsRoutes)
+
+/* Wait Time Engine */
+app.use("/api/wait-time", waitTimeRoutes)
+
+/* Diagnostics */
+app.use("/api/test", testRoutes)
+app.use("/api/admin", adminRoutes)
+
+/* Voice Assistant */
+app.use("/api/voice", voiceRoutes);
+
+/* ==========================================
+   ROOT ROUTE
+========================================== */
+
+const router = express.Router()
+
+router.get("/", (req, res) => {
   res.json({
-    status: "IFCDC Backend Operational",
-  });
-});
+    platform: "IFCDC Barbers Platform",
+    status: "running",
+    version: "1.0"
+  })
+})
 
-app.get("/ping", (req, res) => {
-  console.log("Ping route called");
-  res.json({ message: "pong" });
-});
+app.use("/", router)
 
-/* ===============================
-   DATABASE TEST ROUTE
-================================ */
-app.get("/db-test", async (req, res) => {
+app.get("/admin", (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "admin.html"))
+})
+
+/* ==========================================
+   SERVER START
+========================================== */
+
+const PORT = process.env.PORT || 3000
+
+server.listen(PORT, () => {
+  console.log(`🚀 IFCDC Server running on port ${PORT}`)
+})
+
+server.on("error", (error) => {
+  if (error.code === "EADDRINUSE") {
+    console.error(`❌ Port ${PORT} is already in use.`)
+    console.error("Run: lsof -ti:3000 | xargs kill -9")
+    process.exit(1)
+  }
+
+  console.error("❌ Server startup error:", error)
+  process.exit(1)
+})
+
+let isShuttingDown = false
+
+const isIgnorableShutdownError = (error) => {
+  const code = String(error?.code || "")
+  const message = String(error?.message || "")
+  return (
+    code === "ECONNRESET"
+    || /connection terminated unexpectedly/i.test(message)
+    || /read econreset/i.test(message)
+  )
+}
+
+const shutdown = async (signal = "SIGTERM") => {
+  if (isShuttingDown) return
+  isShuttingDown = true
+
+  console.log(`\n🛑 Received ${signal}. Shutting down gracefully...`)
+
   try {
-    const result = await pool.query("SELECT NOW()");
-    res.json({
-      success: true,
-      databaseTime: result.rows[0]
-    });
+    await new Promise((resolve) => {
+      server.close(() => resolve())
+    })
   } catch (error) {
-    console.error("Database Error:", error);
-    res.status(500).json({
-      success: false,
-      error: error.message,
-    });
+    console.error("Error while closing HTTP server:", error)
   }
-});
-app.get("/test-db", async (req, res) => {
+
   try {
-    const result = await pool.query("SELECT NOW()");
-    res.json({
-      success: true,
-      databaseTime: result.rows[0]
-    });
+    await io.close()
   } catch (error) {
-    console.error("Database test failed:", error);
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
+    console.error("Error while closing Socket.IO server:", error)
   }
-});
 
-app.get("/debug-user", async (req, res) => {
   try {
-    const result = await pool.query(
-      "SELECT id, email, password FROM users WHERE email = $1",
-      ["admin@ifcdc.org"]
-    );
-    
-    if (result.rows.length === 0) {
-      return res.json({ error: "User not found" });
-    }
-    
-    const user = result.rows[0];
-    res.json({
-      id: user.id,
-      email: user.email,
-      passwordHash: user.password,
-      passwordLength: user.password?.length || 0,
-      isHashed: user.password?.startsWith('$2') // bcrypt hashes start with $2
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+    await pool.end()
+  } catch (error) {
+    console.error("Error while closing database pool:", error)
   }
-});
 
-app.post("/login", async (req, res) => {
-  try {
-    const { email, password } = req.body;
+  console.log("✅ Shutdown complete")
+  process.exit(0)
+}
 
-    const result = await pool.query(
-      "SELECT * FROM users WHERE email = $1",
-      [email]
-    );
+process.on("SIGINT", () => {
+  shutdown("SIGINT")
+})
 
-    if (result.rows.length === 0) {
-      return res.status(401).json({ error: "User not found" });
-    }
+process.on("SIGTERM", () => {
+  shutdown("SIGTERM")
+})
 
-    const user = result.rows[0];
-
-    const passwordMatch = await bcrypt.compare(password, user.password);
-    if (!passwordMatch) {
-      return res.status(401).json({ error: "Invalid password" });
-    }
-
-    const token = jwt.sign(
-      {
-        id: user.id,
-        role: user.role,
-        email: user.email
-      },
-      process.env.JWT_SECRET,
-      { expiresIn: "7d" }
-    );
-
-    res.json({
-      message: "Login successful",
-      token,
-      user: {
-        id: user.id,
-        name: user.name,
-        role: user.role
-      }
-    });
-
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Server error" });
+process.on("uncaughtException", (error) => {
+  if (isShuttingDown && isIgnorableShutdownError(error)) {
+    return
   }
-});
 
-console.log("About to start listening...");
-app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
-});
+  console.error("❌ Uncaught exception:", error)
+  shutdown("uncaughtException")
+})
+
+process.on("unhandledRejection", (reason) => {
+  if (isShuttingDown && isIgnorableShutdownError(reason)) {
+    return
+  }
+
+  console.error("❌ Unhandled rejection:", reason)
+  shutdown("unhandledRejection")
+})

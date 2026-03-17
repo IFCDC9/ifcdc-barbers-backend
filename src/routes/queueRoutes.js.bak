@@ -1,0 +1,77 @@
+import express from"express";
+const router = express.Router();
+
+import db from "../../db/db.js"
+
+/* =========================
+   TEMP MEMORY QUEUE
+   (later this will move to DB)
+========================= */
+
+let queue = []
+
+/* =========================
+   GET QUEUE
+========================= */
+
+router.get("/", (req, res) => {
+  res.json({
+    queue
+  })
+})
+
+/* =========================
+   ADD CLIENT TO QUEUE
+========================= */
+
+router.post("/add", (req, res) => {
+
+  const { barber_id, customer_name } = req.body
+
+  const client = {
+    id: Date.now(),
+    barber_id,
+    customer_name
+  }
+
+  queue.push(client)
+
+  res.json({
+    message: "Client added to queue",
+    client
+  })
+
+})
+
+/* =========================
+   REMOVE CLIENT FROM QUEUE
+========================= */
+
+router.delete("/remove/:id", (req, res) => {
+
+  const id = parseInt(req.params.id)
+
+  queue = queue.filter(client => client.id !== id)
+
+  res.json({
+    message: "Client removed from queue",
+    queue
+  })
+
+})
+
+/* =========================
+   CLEAR QUEUE
+========================= */
+
+router.delete("/clear", (req, res) => {
+
+  queue = []
+
+  res.json({
+    message: "Queue cleared"
+  })
+
+})
+
+export default router

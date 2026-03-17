@@ -1,0 +1,62 @@
+import express from"express";
+const router = express.Router();
+
+import db from "../../db/db.js"
+
+/*
+================================
+CUSTOMER CHECK-IN
+POST /api/checkin
+================================
+*/
+
+router.post("/", async (req, res) => {
+
+  const { clientId, barberId } = req.body;
+
+  if (!clientId || !barberId) {
+    return res.status(400).json({
+      success: false,
+      message: "clientId and barberId are required"
+    });
+  }
+
+  try {
+
+    const result = await db.query(
+      `INSERT INTO queue (client_id, barber_id)
+       VALUES ($1,$2)
+       RETURNING *`,
+      [clientId, barberId]
+    );
+
+    // Get updated queue for broadcast
+    const queue = await db.query(
+      "SELECT * FROM queue ORDER BY created_at ASC"
+    );
+
+    const io = req.app.get("io");
+    if (io) {
+      io.emit("queueUpdated", queue.rows);
+    }
+
+    res.json({
+      success: true,
+      message: "Check-in successful",
+      queuePosition: result.rows[0]
+    });
+
+  } catch (error) {
+
+    console.error("Check-in error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Check-in failed"
+    });
+
+  }
+
+});
+
+export default router

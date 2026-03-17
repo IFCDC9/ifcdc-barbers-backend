@@ -1,0 +1,63 @@
+import express from"express";
+const router = express.Router();
+
+import db from "../../db/db.js"
+
+/*
+================================
+GET BARBER DAILY EARNINGS
+GET /api/earnings/:barberId
+================================
+*/
+
+router.get("/:barberId", async (req, res) => {
+
+  const { barberId } = req.params;
+
+  try {
+
+    const appointments = await db.query(
+      `SELECT COUNT(*) AS total_cuts,
+              COALESCE(SUM(price),0) AS haircut_revenue
+       FROM appointments
+       WHERE barber_id = $1
+       AND DATE(created_at) = CURRENT_DATE`,
+      [barberId]
+    );
+
+    const tips = await db.query(
+      `SELECT COALESCE(SUM(amount),0) AS tips
+       FROM tips
+       WHERE barber_id = $1
+       AND DATE(created_at) = CURRENT_DATE`,
+      [barberId]
+    );
+
+    const result = {
+      totalCuts: appointments.rows[0].total_cuts,
+      haircutRevenue: appointments.rows[0].haircut_revenue,
+      tips: tips.rows[0].tips,
+      totalEarnings:
+        Number(appointments.rows[0].haircut_revenue) +
+        Number(tips.rows[0].tips)
+    };
+
+    res.json({
+      success: true,
+      earnings: result
+    });
+
+  } catch (error) {
+
+    console.error("Earnings fetch error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch earnings"
+    });
+
+  }
+
+});
+
+export default router
