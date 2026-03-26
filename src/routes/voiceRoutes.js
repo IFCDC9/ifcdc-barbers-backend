@@ -1,38 +1,26 @@
 import express from "express"
 import twilio from "twilio"
-import { getVoiceForLanguage, selectVoiceByCallerType } from "../services/voiceSelection.js"
 import db from "../db/db.js"
-import { detectLanguage } from "../services/languageService.js"
 import { resolveShop } from "../services/shopService.js"
 import {
-  addMessage,
-  clearSession,
   getSession,
   setLanguage,
   setStep,
   updateSession
 } from "../services/callSession.js";
-import { getAIResponse, processReceptionistSpeech } from "../services/aiReceptionist.js"
-import { processCustomerRequest } from "../services/conversationBrain.js"
 import supabase from "../db/supabaseClient.js"
 import { upsertCustomerProfile } from "../services/customerMemoryService.js"
 import { saveCustomer } from "../services/memoryService.js"
+import { isLocalhostRequest } from "../middleware/isLocalhostRequest.js"
 import {
   getBookingConfirmHold,
   getBookingConfirmLead,
-  getBookingFallbackReply,
   getBookingPlaceholderReply,
-  getBookingToolFallbackReply,
-  getEndCallGoodbye,
-  getGenericFailureReply,
   getIncomingGreeting,
-  getNoSpeechPrompt,
   getPreferredBarberPrompt,
-  getQuotaBookingFallbackReply,
   getRealtimeClosing,
   getRealtimeIntro,
   getRealtimeUnavailablePrompt,
-  getTimeoutReply,
   getVoiceEntryGreeting,
   getVoiceRetryFollowup,
   getVoiceRetryPrompt
@@ -50,45 +38,7 @@ const configuredVoiceBaseUrl = (
 const shouldValidateTwilio = process.env.TWILIO_VALIDATE_SIGNATURE === "true"
 let cachedUsersColumnConfig = null
 
-const END_CALL_HINTS = [
-  "bye",
-  "goodbye",
-  "adios",
-  "adiós",
-  "that is all",
-  "that's all",
-  "no thanks",
-  "no thank you",
-  "thank you",
-  "thanks",
-  "gracias"
-]
-
 const SPOKEN_SHOP_NAME = "I F C D C Barbers"
-
-const VOICE_PROCESS_METRICS = {
-  total: 0,
-  success: 0,
-  apiAssisted: 0,
-  quotaAssisted: 0,
-  noSpeech: 0,
-  endCall: 0,
-  aiError: 0,
-  quota: 0,
-  timeout: 0,
-  fallback: 0
-}
-
-const QUOTA_LOG_SUPPRESS_MS = Number(process.env.AI_QUOTA_LOG_SUPPRESS_MS || 300000)
-const API_ERROR_LOG_SUPPRESS_MS = Number(process.env.AI_API_ERROR_LOG_SUPPRESS_MS || 60000)
-let quotaErrorLogSuppressedUntil = 0
-let apiErrorLogSuppressedUntil = 0
-
-const logVoiceProcessTelemetry = ({ callSid, status, durationMs, speechLength, aiErrorType = "none" }) => {
-  console.log(
-    `[voice.process] callSid=${callSid} status=${status} durationMs=${durationMs} speechLength=${speechLength} aiError=${aiErrorType} totals=${JSON.stringify(VOICE_PROCESS_METRICS)}`
-  )
-}
 
 const ENGLISH_NEURAL_VOICES = [
   "Polly.Kendra-Neural",
@@ -98,32 +48,6 @@ const ENGLISH_NEURAL_VOICES = [
 const getEnglishNeuralVoice = () => {
   const index = Math.floor(Math.random() * ENGLISH_NEURAL_VOICES.length)
   return ENGLISH_NEURAL_VOICES[index]
-}
-
-const inferIntentFromSpeech = (speech = "") => {
-  const text = String(speech).toLowerCase()
-
-  if (/reschedule|change\s+my\s+appointment|move\s+my\s+appointment/.test(text)) {
-    return "reschedule_appointment"
-  }
-
-  if (/cancel|delete\s+my\s+appointment/.test(text)) {
-    return "cancel_appointment"
-  }
-
-  const hasBookingVerb = /book|appointment|schedule|reserve/.test(text)
-  const hasBarbershopContext = /haircut|fade|trim|line\s?up|beard|shave|barber|cut/.test(text)
-  const hasOtherDomainBooking = /flight|airline|hotel|room|uber|taxi|train|bus|movie|ticket/.test(text)
-
-  if ((hasBookingVerb && !hasOtherDomainBooking) || hasBarbershopContext) {
-    return "book_appointment"
-  }
-
-  if (/wait|queue|line|how long/.test(text)) {
-    return "check_wait_time"
-  }
-
-  return "unknown"
 }
 
 const toDisplayName = (value = "") => {
@@ -240,6 +164,7 @@ const getCallerPhone = (req) => req.body.From || ""
 
 const validateTwilioSignature = (req, res, next) => {
   if (!shouldValidateTwilio) return next()
+  if (isLocalhostRequest(req)) return next()
 
   if (!twilioAuthToken) {
     return res.status(500).json({
@@ -262,7 +187,7 @@ const validateTwilioSignature = (req, res, next) => {
   )
 
   if (!isValid) {
-    return res.status(403).json({ success: false, error: "Invalid Twilio signature" })
+    return res.status(401).json({ success: false, error: "Invalid Twilio signature" })
   }
 
   next()
@@ -500,196 +425,7 @@ router.post("/realtime/incoming", validateTwilioSignature, async (req, res) => {
   res.type("text/xml").send(twiml.toString())
 })
 
-// Process caller speech
-router.post("/process", async (req, res) => {
-  const startedAt = Date.now()
-
-  const twiml = new VoiceResponse();
-
-  const speech = req.body.SpeechResult || "";
-  const callSid = req.body.CallSid || "local-dev-call";
-  VOICE_PROCESS_METRICS.total += 1
-
-  const session = getSession(callSid);
-  const callerPhone = session?.data?.callerPhone || ""
-  const customerId = Number(session?.data?.customer?.id)
-
-  if (!speech) {
-    VOICE_PROCESS_METRICS.noSpeech += 1
-
-    const gather = twiml.gather({
-      input: ["speech"],
-      action: getAbsoluteUrl(req, "/api/voice/process"),
-      method: "POST",
-      speechTimeout: "auto"
-    });
-
-    gather.say(getNoSpeechPrompt());
-
-    logVoiceProcessTelemetry({
-      callSid,
-      status: "no_speech",
-      durationMs: Date.now() - startedAt,
-      speechLength: 0
-    })
-
-    res.type("text/xml");
-    return res.send(twiml.toString());
-
-  }
-
-  try {
-    const detected = await detectLanguage(speech)
-    const detectedLanguage = detected?.language || null
-    if (detectedLanguage) {
-      setLanguage(callSid, detectedLanguage)
-
-      if (Number.isFinite(customerId) && customerId > 0) {
-        await upsertCustomerProfile(customerId, {
-          language: detectedLanguage,
-          preferences: {
-            preferred_language: detectedLanguage
-          }
-        })
-      }
-    }
-  } catch {
-    // ignore language persistence errors during live response flow
-  }
-
-  const normalizedSpeech = String(speech).toLowerCase().trim()
-  if (END_CALL_HINTS.some(hint => normalizedSpeech.includes(hint))) {
-    VOICE_PROCESS_METRICS.endCall += 1
-    twiml.say(
-      { voice: "Polly.Joanna-Neural" },
-      getEndCallGoodbye(SPOKEN_SHOP_NAME)
-    )
-    twiml.hangup()
-    clearSession(callSid)
-
-    logVoiceProcessTelemetry({
-      callSid,
-      status: "end_call",
-      durationMs: Date.now() - startedAt,
-      speechLength: speech.length
-    })
-
-    res.type("text/xml")
-    return res.send(twiml.toString())
-  }
-
-  addMessage(callSid, "user", speech);
-
-  let aiReply = getGenericFailureReply()
-  let aiErrorType = "none"
-  let usedFallbackReply = false
-  const inferredIntent = inferIntentFromSpeech(speech)
-
-  if (inferredIntent === "book_appointment" || inferredIntent === "reschedule_appointment" || inferredIntent === "cancel_appointment") {
-    const bookingResult = await processReceptionistSpeech({ speech, callSid, callerPhone })
-    aiReply = bookingResult?.responseText || getBookingFallbackReply()
-    aiErrorType = "deterministic_booking"
-  } else {
-    try {
-      const shopId = session?.data?.shopId || null
-      // Prefer the lightweight deterministic conversation brain for simple routing
-      try {
-        aiReply = await processCustomerRequest(shopId, speech)
-      } catch (innerErr) {
-        // If the conversation brain fails or is not applicable, fall back to AI
-        aiReply = await getAIResponse(session.history, shopId, callerPhone)
-      }
-    } catch (error) {
-    usedFallbackReply = true
-    VOICE_PROCESS_METRICS.aiError += 1
-    const errorMessage = String(error?.message || "")
-    if (/timed out/i.test(errorMessage)) {
-      aiErrorType = "timeout"
-      VOICE_PROCESS_METRICS.timeout += 1
-      aiReply = getTimeoutReply()
-    } else if (/quota|insufficient_quota|billing|AI quota backoff active/i.test(errorMessage)) {
-      aiErrorType = "quota"
-      VOICE_PROCESS_METRICS.quota += 1
-      try {
-        const deterministic = await processReceptionistSpeech({ speech, callSid, callerPhone })
-        aiReply = deterministic?.responseText
-          || getBookingToolFallbackReply()
-        aiErrorType = "quota_assisted"
-        usedFallbackReply = false
-      } catch {
-        aiReply = getQuotaBookingFallbackReply()
-      }
-    } else {
-      aiErrorType = "api_error"
-      try {
-        const deterministic = await processReceptionistSpeech({ speech, callSid, callerPhone })
-        aiReply = deterministic?.responseText
-          || getBookingToolFallbackReply()
-        usedFallbackReply = false
-      } catch {
-        aiReply = getGenericFailureReply()
-      }
-    }
-    if (usedFallbackReply) {
-      VOICE_PROCESS_METRICS.fallback += 1
-    }
-
-    if (aiErrorType === "quota") {
-      const now = Date.now()
-      if (now >= quotaErrorLogSuppressedUntil) {
-        quotaErrorLogSuppressedUntil = now + QUOTA_LOG_SUPPRESS_MS
-        console.error("AI response error:", errorMessage || error)
-      }
-    } else if (aiErrorType === "api_error") {
-      const now = Date.now()
-      if (now >= apiErrorLogSuppressedUntil) {
-        apiErrorLogSuppressedUntil = now + API_ERROR_LOG_SUPPRESS_MS
-        console.error("AI response error:", errorMessage || error)
-      }
-    } else {
-      console.error("AI response error:", errorMessage || error)
-    }
-  }
-  }
-
-  if (aiErrorType === "none") {
-    VOICE_PROCESS_METRICS.success += 1
-  } else if (aiErrorType === "quota_assisted") {
-    VOICE_PROCESS_METRICS.quotaAssisted += 1
-  } else if (!usedFallbackReply) {
-    VOICE_PROCESS_METRICS.apiAssisted += 1
-  }
-
-  addMessage(callSid, "assistant", aiReply);
-
-  twiml.say(
-    { voice: "Polly.Joanna-Neural" },
-    aiReply
-  );
-
-  const gather = twiml.gather({
-    input: ["speech"],
-    action: getAbsoluteUrl(req, "/api/voice/process"),
-    method: "POST",
-    speechTimeout: "auto"
-  });
-
-  const processStatus = aiErrorType === "none"
-    ? "success"
-    : (usedFallbackReply ? "fallback" : "assisted")
-
-  logVoiceProcessTelemetry({
-    callSid,
-    status: processStatus,
-    durationMs: Date.now() - startedAt,
-    speechLength: speech.length,
-    aiErrorType
-  })
-
-  res.type("text/xml");
-  res.send(twiml.toString());
-
-});
+// POST /api/voice/process is handled by server/routes/voice.ts (Gather loop + hangup on completed booking).
 
 router.post("/confirm", validateTwilioSignature, async (req, res) => {
   const twiml = new VoiceResponse()

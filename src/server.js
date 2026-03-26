@@ -24,11 +24,14 @@ import tipsRoutes from "./routes/tipsRoutes.js"
 import waitTimeRoutes from "./routes/waitTimeRoutes.js"
 import appointmentRoutes from "./routes/appointments.js"
 import testRoutes from "./routes/testRoutes.js"
-import voiceRoutes from "./routes/voiceRoutes.js";
+import voiceAiRoutes from "../server/routes/voice.ts"
+import voiceRoutes from "./routes/voiceRoutes.js"
+import receptionistRoutes from "./routes/receptionistRoutes.js"
 import bookingRoutes from "./routes/bookingRoutes.js"
 import paypalRoutes from "./routes/paypalRoutes.js"
 import adminRoutes from "./routes/adminRoutes.js"
 import { attachTwilioRealtimeBridge } from "./services/realtimeVoice.js"
+import { logStartupEnvDiagnostics } from "./config/envDiagnostics.js"
 
 const app = express()
 const server = http.createServer(app)
@@ -49,12 +52,85 @@ attachTwilioRealtimeBridge({
 })
 
 /* ==========================================
-   MIDDLEWARE
+   PUBLIC ROUTES (very top — no cors / body parsers / API middleware)
+   GET / and POST /voice must stay first on `app` so nothing can intercept them.
 ========================================== */
 
+app.get("/", (_req, res) => {
+  res.send("IFCDC Barbers Backend Running")
+})
+
+app.post("/voice", (_req, res) => {
+  res.type("text/xml")
+  res.send(`
+    <Response>
+      <Say>Welcome to IFCDC Barbers</Say>
+    </Response>
+  `)
+})
+
+/* Optional public probe (no /api middleware stack) */
+app.get("/api/health", async (_req, res) => {
+  let db = { ok: false, error: null }
+  try {
+    await pool.query("SELECT 1")
+    db.ok = true
+  } catch (err) {
+    db.error = String(err?.code || err?.message || "db_unreachable")
+  }
+
+  res.json({
+    ok: true,
+    uptime: process.uptime(),
+    db,
+    openai: Boolean(process.env.OPENAI_API_KEY?.trim()),
+    twilio: Boolean(
+      process.env.TWILIO_ACCOUNT_SID?.trim()
+      && process.env.TWILIO_AUTH_TOKEN?.trim()
+      && process.env.TWILIO_PHONE_NUMBER?.trim()
+    ),
+    twilioSignatureValidation: process.env.TWILIO_VALIDATE_SIGNATURE === "true",
+    twilioWebhooks: {
+      smsIncoming: "POST /api/sms/incoming",
+      smsIncomingAlt: "POST /api/voice/sms-incoming",
+      voiceIncomingCall: "POST /api/voice/incoming-call",
+      voiceProcess: "POST /api/voice/process",
+      voiceStatus: "POST /api/voice/status"
+    }
+  })
+})
+
+/* CORS for everything after public handlers (does not run if a public route above already finished the response). */
 app.use(cors())
-app.use(express.json())
-app.use(express.urlencoded({ extended: true }))
+
+/* ==========================================
+   /api only — body parsers + route mounts
+   requireAdmin, Twilio signature checks, etc. live on routers below (never on `app`).
+========================================== */
+
+const apiRouter = express.Router()
+
+apiRouter.use(express.json())
+apiRouter.use(express.urlencoded({ extended: true }))
+
+apiRouter.use("/dashboard", dashboardRoutes)
+apiRouter.use("/queue", queueRoutes)
+apiRouter.use("/barber-status", barberStatusRoutes)
+apiRouter.use(checkinRoutes)
+apiRouter.use("/bookings", bookingRoutes)
+apiRouter.use("/appointments", appointmentRoutes)
+apiRouter.use("/paypal", paypalRoutes)
+apiRouter.use("/earnings", earningsRoutes)
+apiRouter.use("/tips", tipsRoutes)
+apiRouter.use("/wait-time", waitTimeRoutes)
+apiRouter.use("/test", testRoutes)
+apiRouter.use("/admin", adminRoutes)
+apiRouter.use("/receptionist", receptionistRoutes)
+apiRouter.use("/voice", voiceAiRoutes)
+apiRouter.use("/voice", voiceRoutes)
+
+app.use("/api", apiRouter)
+
 app.use("/admin", express.static(path.join(__dirname, "public")))
 
 /* ==========================================
@@ -88,50 +164,6 @@ io.on("connection", (socket) => {
 
 })
 
-/* ==========================================
-   API ROUTES
-========================================== */
-
-app.use("/api/dashboard", dashboardRoutes)
-app.use("/api/queue", queueRoutes)
-app.use("/api/barber-status", barberStatusRoutes)
-app.use("/api", checkinRoutes);
-
-/* Booking System */
-app.use("/api/bookings", bookingRoutes)
-app.use("/api/appointments", appointmentRoutes)
-app.use("/api/paypal", paypalRoutes)
-
-/* Financial System */
-app.use("/api/earnings", earningsRoutes)
-app.use("/api/tips", tipsRoutes)
-
-/* Wait Time Engine */
-app.use("/api/wait-time", waitTimeRoutes)
-
-/* Diagnostics */
-app.use("/api/test", testRoutes)
-app.use("/api/admin", adminRoutes)
-
-/* Voice Assistant */
-app.use("/api/voice", voiceRoutes);
-
-/* ==========================================
-   ROOT ROUTE
-========================================== */
-
-const router = express.Router()
-
-router.get("/", (req, res) => {
-  res.json({
-    platform: "IFCDC Barbers Platform",
-    status: "running",
-    version: "1.0"
-  })
-})
-
-app.use("/", router)
-
 app.get("/admin", (req, res) => {
   res.sendFile(path.join(__dirname, "public", "admin.html"))
 })
@@ -140,16 +172,18 @@ app.get("/admin", (req, res) => {
    SERVER START
 ========================================== */
 
-const PORT = process.env.PORT || 3000
+const PORT = process.env.PORT || 5050
 
 server.listen(PORT, () => {
   console.log(`🚀 IFCDC Server running on port ${PORT}`)
+  logStartupEnvDiagnostics()
+  console.log("[boot] Hot-reload: run `npm run dev` (nodemon watches src/ + server/)")
 })
 
 server.on("error", (error) => {
   if (error.code === "EADDRINUSE") {
     console.error(`❌ Port ${PORT} is already in use.`)
-    console.error("Run: lsof -ti:3000 | xargs kill -9")
+    console.error("Run: lsof -ti:5050 | xargs kill -9")
     process.exit(1)
   }
 

@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "mobile",
+    "name": "IFCDC BARBER",
     "slug": "mobile",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -17,9 +17,14 @@
       "**/*"
     ],
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.ifcdcbarbers.mobile",
+      "infoPlist": {
+        "LSApplicationQueriesSchemes": ["tel", "sms"]
+      }
     },
     "android": {
+      "package": "com.ifcdcbarbers.mobile",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#FFFFFF"
@@ -27,6 +32,10 @@
     },
     "web": {
       "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "backendUrl": "http://127.0.0.1:5050",
+      "paypalClientId": "AUibwZAqgS6kZ_4Sk8g9fRROoj8zY5XxgFW-YFq4lWHz4ARQNT5ElehZQUl3SY3slr-5VTLI2HazUMrb"
     }
   }
 }

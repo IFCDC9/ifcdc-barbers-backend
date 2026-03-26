@@ -3,10 +3,10 @@ dotenv.config()
 
 export function requireAdmin(req, res, next) {
   const adminKey = req.headers["x-admin-key"];
-
-  if (!adminKey || adminKey !== process.env.ADMIN_SECRET) {
-    return res.status(403).json({ error: "Forbidden" });
+  const expectedKey = process.env.ADMIN_SECRET;
+  if (!adminKey || adminKey !== expectedKey) {
+    console.warn("[ADMIN] Unauthorized: received=", adminKey, "expected=", expectedKey);
+    return res.status(401).json({ error: "Unauthorized" });
   }
-
   next();
 }
