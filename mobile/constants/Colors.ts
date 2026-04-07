@@ -1,14 +1,21 @@
-export default {
-  primary: '#6200ee',
-  primaryVariant: '#3700b3',
-  secondary: '#03dac6',
-  secondaryVariant: '#018786',
-  background: '#f6f6f6',
-  surface: '#ffffff',
-  error: '#b00020',
-  text: {
-    primary: '#000000',
-    secondary: '#ffffff',
+const palette = {
+  primary: "#f5c842",
+  inactive: "rgba(255,255,255,0.45)",
+  background: "#050505",
+  surface: "#0d0d0d",
+  error: "#b00020",
+  light: {
+    background: "#f6f6f6",
+    text: "#000000",
   },
-  // Add more colors as needed
+  dark: {
+    background: "#050505",
+    text: "#ffffff",
+  },
+  text: {
+    primary: "#000000",
+    secondary: "#ffffff",
+  },
 };
+
+export default palette;

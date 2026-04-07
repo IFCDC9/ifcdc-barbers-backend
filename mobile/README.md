@@ -54,6 +54,23 @@ To get started with the project, follow these steps:
    ```
    npm start
    ```
+   Same Wi‑Fi as your computer (no public tunnel):
+   ```
+   npm run lan
+   ```
+   Remote device / different network (requires ngrok; set `NGROK_AUTH_TOKEN` in `.env` if tunnel times out — see `.env.example`):
+   ```
+   npm run tunnel
+   ```
+   **iOS Simulator + “Could not connect to development server”:** Metro must be on **8081** and match **127.0.0.1** from the simulator’s point of view.
+   1. `cd` into `mobile/`, then only reset Expo: `pkill -f expo` (do not stop the backend on 5050).
+   2. If you see **`EADDRINUSE :::8081`**, free Metro first: `npm run metro:kill` (or use any `npm run` / `npm run expo:*` script — they kill **8081** before starting).
+   3. Start LAN + clear cache: `npm run lan:clear` or `npx expo start --lan --clear` and wait until Metro is waiting / a URL appears.
+   4. `open -a Simulator` if needed; in the Expo terminal press **`i`** to attach iOS.
+   5. In the simulator: **Cmd+D** → **Reload**.
+   If the URL still mismatches, try `npm run lan:clear:sim` (sets `REACT_NATIVE_PACKAGER_HOSTNAME=127.0.0.1`) or add that line to `mobile/.env`.
+   One-shot open iOS: `npm run ios:lan`. Failsafe: `npx expo run:ios`.
+   After changing `babel.config.js` or `metro.config.js`, stop Expo, run `npm run lan:clear` (or `start:clear`) once. If bundling still sticks at **0%**, install Watchman (`brew install watchman`) then `watchman watch-del-all`, or remove stray **`node_modules__corrupt_*`** backup folders under `mobile/` (they duplicate `node_modules` and overwhelm the file watcher).
 
 5. Open the Expo Go app on your mobile device and scan the QR code to view the application.
 

@@ -11,9 +11,10 @@ import {
   ScrollView,
 } from 'react-native';
 import { WebView, WebViewMessageEvent } from 'react-native-webview';
-
-// ✏️ Change this to your ngrok / production URL when testing on a real device
-const BACKEND_URL = 'http://localhost:3000';
+import { BACKEND_URL } from '../../constants/config';
+import CardContainer from '../../components/CardContainer';
+import GlowButton from '../../components/GlowButton';
+import { theme } from '../../constants/theme';
 
 interface PaymentScreenProps {
   onSuccess?: (bookingId: string, orderId: string) => void;
@@ -35,12 +36,13 @@ const PaymentScreen = ({
   onCancel,
 }: PaymentScreenProps) => {
   const webViewRef = useRef<WebView>(null);
-  const [name, setName] = useState('Test User');
-  const [phone, setPhone] = useState('5551234567');
-  const [service, setService] = useState('Haircut');
-  const [date, setDate] = useState('2026-03-24');
-  const [time, setTime] = useState('13:00');
-  const [price, setPrice] = useState('25.00');
+  const [name, setName] = useState('');
+  const [phone, setPhone] = useState('');
+  const [service, setService] = useState('');
+  const [barberName, setBarberName] = useState('');
+  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [time, setTime] = useState('');
+  const [price, setPrice] = useState('');
   const [bookingId, setBookingId] = useState<string | null>(null);
   const [isCreatingBooking, setIsCreatingBooking] = useState(false);
   const [checkoutReady, setCheckoutReady] = useState(false);
@@ -60,24 +62,26 @@ const PaymentScreen = ({
     try {
       setIsCreatingBooking(true);
 
-      const response = await fetch(`${BACKEND_URL}/api/bookings/book`, {
+      const response = await fetch(`${BACKEND_URL}/api/appointments`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          name,
-          phone,
+          customer_name: name,
+          customer_phone: phone,
           service,
           date,
           time,
+          barberName,
+          base_price: price,
         }),
       });
 
-      const data = (await response.json()) as BookingResponse;
+      const data = (await response.json()) as any;
 
-      if (!response.ok || !data.booking?.id) {
-        throw new Error(data.error || 'Booking creation failed');
+      if (!response.ok || !data?.booking?.id) {
+        throw new Error(data?.message || data?.error || 'Booking creation failed');
       }
 
       const { booking } = data;
@@ -103,8 +107,27 @@ const PaymentScreen = ({
 
       switch (msg.type) {
         case 'PAYMENT_SUCCESS':
-          Alert.alert('✅ Payment Confirmed', `Booking #${msg.bookingId} is all set!`);
-          onSuccess?.(msg.bookingId, msg.orderId);
+          // Production-grade: verify on backend before trusting success.
+          (async () => {
+            try {
+              const verifyRes = await fetch(`${BACKEND_URL}/api/paypal/verify`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ bookingId: msg.bookingId, orderId: msg.orderId, expectedAmount: price }),
+              });
+              const verifyJson = await verifyRes.json();
+              if (!verifyRes.ok || !verifyJson?.ok) {
+                throw new Error(verifyJson?.error || verifyJson?.status || "verification_failed");
+              }
+              Alert.alert("✅ Payment Verified", `Booking #${msg.bookingId} is paid.`);
+              onSuccess?.(msg.bookingId, msg.orderId);
+            } catch (e) {
+              Alert.alert(
+                "Payment Pending",
+                "We captured the payment but could not verify it yet. Please wait a moment and try again."
+              );
+            }
+          })();
           break;
         case 'PAYMENT_ERROR':
           Alert.alert('❌ Payment Failed', 'Something went wrong. Please try again.');
@@ -126,21 +149,25 @@ const PaymentScreen = ({
       <Text style={styles.header}>✂️ IFCDC Checkout</Text>
       {!checkoutReady || !checkoutUrl ? (
         <ScrollView contentContainerStyle={styles.formContainer}>
-          <Text style={styles.sectionTitle}>Create Booking</Text>
-          <TextInput value={name} onChangeText={setName} placeholder="Name" placeholderTextColor="#777" style={styles.input} />
-          <TextInput value={phone} onChangeText={setPhone} placeholder="Phone" placeholderTextColor="#777" keyboardType="phone-pad" style={styles.input} />
-          <TextInput value={service} onChangeText={setService} placeholder="Service" placeholderTextColor="#777" style={styles.input} />
-          <TextInput value={date} onChangeText={setDate} placeholder="YYYY-MM-DD" placeholderTextColor="#777" style={styles.input} />
-          <TextInput value={time} onChangeText={setTime} placeholder="HH:MM" placeholderTextColor="#777" style={styles.input} />
-          <TextInput value={price} onChangeText={setPrice} placeholder="Price" placeholderTextColor="#777" keyboardType="decimal-pad" style={styles.input} />
+          <CardContainer glow>
+            <Text style={styles.sectionTitle}>Create Booking</Text>
+            <Text style={styles.sectionHint}>Enter details to reserve your chair, then pay securely.</Text>
 
-          <Pressable style={styles.primaryButton} onPress={createBooking} disabled={isCreatingBooking}>
-            {isCreatingBooking ? (
-              <ActivityIndicator color="#111" />
-            ) : (
-              <Text style={styles.primaryButtonText}>Create Booking & Continue</Text>
-            )}
-          </Pressable>
+            <TextInput value={name} onChangeText={setName} placeholder="Name" placeholderTextColor="rgba(255,255,255,0.45)" style={styles.input} />
+            <TextInput value={phone} onChangeText={setPhone} placeholder="Phone" placeholderTextColor="rgba(255,255,255,0.45)" keyboardType="phone-pad" style={styles.input} />
+            <TextInput value={service} onChangeText={setService} placeholder="Service" placeholderTextColor="rgba(255,255,255,0.45)" style={styles.input} />
+            <TextInput value={barberName} onChangeText={setBarberName} placeholder="Barber name" placeholderTextColor="rgba(255,255,255,0.45)" style={styles.input} />
+            <TextInput value={date} onChangeText={setDate} placeholder="YYYY-MM-DD" placeholderTextColor="rgba(255,255,255,0.45)" style={styles.input} />
+            <TextInput value={time} onChangeText={setTime} placeholder="HH:MM or 2:30 PM" placeholderTextColor="rgba(255,255,255,0.45)" style={styles.input} />
+            <TextInput value={price} onChangeText={setPrice} placeholder="Base price (USD)" placeholderTextColor="rgba(255,255,255,0.45)" keyboardType="decimal-pad" style={styles.input} />
+
+            <GlowButton
+              label="Create Booking & Continue"
+              onPress={createBooking}
+              disabled={isCreatingBooking}
+              loading={isCreatingBooking}
+            />
+          </CardContainer>
         </ScrollView>
       ) : (
         <>
@@ -175,61 +202,55 @@ const PaymentScreen = ({
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0a0a0a',
+    backgroundColor: theme.colors.bg0,
   },
   formContainer: {
     padding: 20,
     gap: 12,
   },
   header: {
-    color: '#f5c842',
+    color: theme.colors.gold,
     fontSize: 20,
-    fontWeight: '700',
+    fontWeight: '900',
     textAlign: 'center',
     paddingVertical: 14,
     borderBottomWidth: 1,
-    borderBottomColor: '#2a2a2a',
+    borderBottomColor: 'rgba(255,255,255,0.10)',
   },
   sectionTitle: {
-    color: '#fff',
+    color: theme.colors.text,
     fontSize: 18,
-    fontWeight: '700',
-    marginBottom: 8,
+    fontWeight: '900',
+    marginBottom: 6,
+  },
+  sectionHint: {
+    color: theme.colors.textMuted,
+    fontSize: 13,
+    lineHeight: 18,
+    marginBottom: 10,
   },
   input: {
-    backgroundColor: '#161616',
-    color: '#fff',
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    color: theme.colors.text,
     borderWidth: 1,
-    borderColor: '#2a2a2a',
+    borderColor: 'rgba(255,255,255,0.10)',
     borderRadius: 12,
     paddingHorizontal: 14,
     paddingVertical: 12,
     fontSize: 16,
   },
-  primaryButton: {
-    marginTop: 8,
-    backgroundColor: '#f5c842',
-    borderRadius: 12,
-    paddingVertical: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  primaryButtonText: {
-    color: '#111',
-    fontSize: 16,
-    fontWeight: '700',
-  },
   checkoutMeta: {
     paddingHorizontal: 16,
     paddingVertical: 10,
     borderBottomWidth: 1,
-    borderBottomColor: '#2a2a2a',
+    borderBottomColor: 'rgba(255,255,255,0.10)',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    backgroundColor: theme.colors.bg1,
   },
   checkoutText: {
-    color: '#fff',
+    color: theme.colors.text,
     fontSize: 15,
     fontWeight: '600',
   },
@@ -238,20 +259,20 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
   },
   linkButtonText: {
-    color: '#f5c842',
+    color: theme.colors.gold,
     fontSize: 14,
     fontWeight: '600',
   },
   webview: {
     flex: 1,
-    backgroundColor: '#0a0a0a',
+    backgroundColor: theme.colors.bg0,
   },
   loading: {
     position: 'absolute',
     top: 0, left: 0, right: 0, bottom: 0,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#0a0a0a',
+    backgroundColor: theme.colors.bg0,
   },
 });
 

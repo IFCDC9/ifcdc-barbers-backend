@@ -1,8 +1,7 @@
-import { useColorScheme as useRNCColorScheme } from 'react-native-appearance';
+import { useColorScheme as useRNColorScheme } from "react-native";
 
 const useColorScheme = () => {
-  const colorScheme = useRNCColorScheme();
-  return colorScheme;
+  return useRNColorScheme();
 };
 
 export default useColorScheme;

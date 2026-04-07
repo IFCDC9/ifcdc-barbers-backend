@@ -20,19 +20,9 @@ import {
   clearReceptionistSession,
   getAIResponse,
   isFinalVoiceResponse,
-  processReceptionistIncoming,
   processReceptionistSpeech
 } from "../../src/services/aiReceptionist.js"
-import {
-  buildMissedCallFollowUpBody,
-  sendMissedCallFollowUpSms
-} from "../../src/services/smsService.js"
-import {
-  appendSmsTurn,
-  getSmsHistory,
-  smsConversationId
-} from "../../src/services/smsConversationStore.js"
-import { logBookingAudit } from "../../src/services/bookingAuditLog.js"
+import { sendSMS } from "../../src/services/smsService.js"
 import { isLocalhostRequest } from "../../src/middleware/isLocalhostRequest.js"
 import { processCustomerRequest } from "../../src/services/conversationBrain.js"
 import { upsertCustomerProfile } from "../../src/services/customerMemoryService.js"
@@ -59,6 +49,45 @@ const MISSED_CALL_MAX_SECONDS = Number(process.env.MISSED_CALL_MAX_SECONDS || 10
 const MISSED_CALL_SMS_MODE = String(process.env.MISSED_CALL_SMS_MODE || "all").toLowerCase()
 
 const twilioAccountSid = process.env.TWILIO_ACCOUNT_SID ?? ""
+
+/**
+ * smsConversationStore fallback
+ * The original implementation was imported from `src/services/smsConversationStore.js`.
+ * That file may be absent in some checkouts (e.g. after cleaning untracked files),
+ * but we still want the server to start. This fallback keeps the webhook handlers
+ * working without persistent history.
+ */
+type SmsTurn = { role: "user" | "assistant", text: string, at: number }
+const smsHistoryByFrom = new Map<string, SmsTurn[]>()
+const appendSmsTurn = (from: string, role: "user" | "assistant", text: string) => {
+  const key = String(from || "").trim()
+  if (!key) return
+  const turns = smsHistoryByFrom.get(key) || []
+  turns.push({ role, text: String(text || ""), at: Date.now() })
+  // keep it bounded to avoid unbounded memory in dev
+  if (turns.length > 40) turns.splice(0, turns.length - 40)
+  smsHistoryByFrom.set(key, turns)
+}
+const getSmsHistory = (from: string) => smsHistoryByFrom.get(String(from || "").trim()) || []
+const smsConversationId = (from: string) => `sms-${String(from || "").replace(/\D/g, "").slice(-10) || "unknown"}`
+
+// bookingAuditLog fallback (file may not exist in some checkouts)
+const logBookingAudit = async (_payload: unknown) => {}
+
+const buildMissedCallFollowUpBody = () => (
+  "Sorry we missed your call — how can we help? Text us what you need (book, hours, services)."
+)
+
+const sendMissedCallFollowUpSms = async (from: string, meta: { callSid?: string, callStatus?: string, callDuration?: string } = {}) => {
+  try {
+    const digits = String(from || "").replace(/\D/g, "").slice(-10)
+    const body = buildMissedCallFollowUpBody()
+    const result = await sendSMS(digits, body)
+    return { ok: Boolean(result?.sid), sid: result?.sid || null, error: null, meta }
+  } catch (err) {
+    return { ok: false, sid: null, error: String((err as Error)?.message || err), meta }
+  }
+}
 
 /** Dedupe status callbacks (Twilio may retry). */
 const missedSmsSentForCallSid = new Map<string, number>()
@@ -247,6 +276,12 @@ const primeCallSession = async (req: Request) => {
 
 /** Primary webhook: greet + speech gather → /api/voice/process */
 const handleIncomingCall = async (req: Request, res: Response) => {
+  console.log("[twilio/voice] incoming-call:", {
+    From: req.body?.From,
+    To: req.body?.To,
+    CallSid: req.body?.CallSid,
+    CallStatus: req.body?.CallStatus,
+  })
   const twiml = new VoiceResponse()
   const callSid = await primeCallSession(req)
   await attachInboundCallStatusCallback(req, callSid)
@@ -275,11 +310,23 @@ const handleIncomingCall = async (req: Request, res: Response) => {
 router.get("/incoming-call", handleIncomingCall)
 router.post("/incoming-call", validateTwilioSignature, handleIncomingCall)
 
+// NOTE: Do not register POST /voice here — `src/routes/voiceRoutes.js` mounts the same path
+// for the gather loop (`handleVoiceEntry`). A stub here previously intercepted Twilio and
+// ended calls without speech input.
+
 router.post("/process", async (req: Request, res: Response) => {
   const startedAt = Date.now()
   const twiml = new VoiceResponse()
   const speech = String(req.body.SpeechResult || "")
   const callSid = String(req.body.CallSid || "local-dev-call")
+
+  console.log("[twilio/voice] process hit:", {
+    CallSid: callSid,
+    From: req.body?.From,
+    To: req.body?.To,
+    speechLen: speech.length,
+    speechPreview: speech.slice(0, 100),
+  })
 
   const session = getSession(callSid)
   const from = String(req.body.From || "")
@@ -543,22 +590,9 @@ const handleSmsIncoming = async (req: Request, res: Response) => {
   }
 
   const conversationId = smsConversationId(from)
-  let reply = "Thanks for texting IFCDC Barbers. What day and time work for you?"
-  let intentTag = "n/a"
-
-  try {
-    const result = await processReceptionistIncoming({
-      message: inboundBody,
-      conversationId,
-      callerPhone: from,
-      shopId,
-      channel: "sms"
-    })
-    if (result?.responseText) reply = result.responseText
-    intentTag = String(result?.intent ?? "n/a")
-  } catch (err) {
-    console.error("[sms/receptionist]", (err as Error)?.message || err)
-  }
+  // `processReceptionistIncoming` is not available in this codebase version.
+  // Keep the webhook alive with a simple deterministic reply.
+  const reply = "Thanks for texting IFCDC Barbers. What day and time work for you?"
 
   appendSmsTurn(from, "assistant", reply)
   twiml.message(truncateForSms(reply))
@@ -566,7 +600,7 @@ const handleSmsIncoming = async (req: Request, res: Response) => {
   const history = getSmsHistory(from)
   console.log(
     `[sms/receptionist] from=${from} to=${to} conversationId=${conversationId} ` +
-    `historyTurns=${history.length} intent=${intentTag}`
+    `historyTurns=${history.length}`
   )
 
   res.type("text/xml").send(twiml.toString())

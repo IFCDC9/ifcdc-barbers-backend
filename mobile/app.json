@@ -1,41 +1,23 @@
 {
   "expo": {
-    "name": "IFCDC BARBER",
-    "slug": "mobile",
+    "name": "IFCDC Barbers",
+    "slug": "ifcdc-barbers",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
-    "splash": {
-      "image": "./assets/splash.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
-    },
-    "updates": {
-      "fallbackToCacheTimeout": 0
-    },
+    "userInterfaceStyle": "light",
     "assetBundlePatterns": [
       "**/*"
     ],
+    "scheme": "ifcdc-barbers",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.ifcdcbarbers.mobile",
-      "infoPlist": {
-        "LSApplicationQueriesSchemes": ["tel", "sms"]
-      }
+      "bundleIdentifier": "com.ifcdc.barbers"
     },
     "android": {
-      "package": "com.ifcdcbarbers.mobile",
-      "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#FFFFFF"
-      }
+      "package": "com.ifcdc.barbers"
     },
-    "web": {
-      "favicon": "./assets/favicon.png"
-    },
-    "extra": {
-      "backendUrl": "http://127.0.0.1:5050",
-      "paypalClientId": "AUibwZAqgS6kZ_4Sk8g9fRROoj8zY5XxgFW-YFq4lWHz4ARQNT5ElehZQUl3SY3slr-5VTLI2HazUMrb"
-    }
+    "plugins": [
+      "expo-secure-store"
+    ]
   }
 }
