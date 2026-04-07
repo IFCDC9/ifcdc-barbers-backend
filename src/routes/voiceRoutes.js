@@ -1,5 +1,4 @@
 import express from "express"
-import twilio from "twilio"
 import db from "../db/db.js"
 import { resolveShop } from "../services/shopService.js"
 import {
@@ -27,7 +26,23 @@ import {
 } from "../services/voiceCopy.js"
 
 const router = express.Router()
-const { twiml: { VoiceResponse } } = twilio
+let cachedTwilio = null
+let cachedVoiceResponse = null
+
+const getTwilio = async () => {
+  if (cachedTwilio) return cachedTwilio
+  const { default: twilio } = await import("twilio")
+  cachedTwilio = twilio
+  return cachedTwilio
+}
+
+const getVoiceResponse = async () => {
+  if (cachedVoiceResponse) return cachedVoiceResponse
+  const twilio = await getTwilio()
+  cachedVoiceResponse = twilio?.twiml?.VoiceResponse
+  if (!cachedVoiceResponse) throw new Error("Twilio VoiceResponse not available")
+  return cachedVoiceResponse
+}
 
 const twilioAuthToken = process.env.TWILIO_AUTH_TOKEN
 const configuredVoiceBaseUrl = (
@@ -162,7 +177,7 @@ const getAbsoluteWsUrl = (req, path) => {
 
 const getCallerPhone = (req) => req.body.From || ""
 
-const validateTwilioSignature = (req, res, next) => {
+const validateTwilioSignature = async (req, res, next) => {
   if (!shouldValidateTwilio) return next()
   if (isLocalhostRequest(req)) return next()
 
@@ -179,6 +194,7 @@ const validateTwilioSignature = (req, res, next) => {
   }
 
   const requestUrl = getAbsoluteUrl(req, req.originalUrl)
+  const twilio = await getTwilio()
   const isValid = twilio.validateRequest(
     twilioAuthToken,
     signature,
@@ -194,7 +210,8 @@ const validateTwilioSignature = (req, res, next) => {
 }
 
 const handleIncoming = async (req, res) => {
-  const twiml = new VoiceResponse()
+  const VR = await getVoiceResponse()
+  const twiml = new VR()
   const callSid = req.body.CallSid || "local-dev-call"
     const phone = req.body.From;
     const calledNumber = req.body.To || ""
@@ -268,14 +285,15 @@ const handleIncoming = async (req, res) => {
       shopName: shop?.name || SPOKEN_SHOP_NAME
     })
   )
-  twiml.redirect({ method: "POST" }, "/api/voice/voice")
+  twiml.redirect({ method: "POST" }, getAbsoluteUrl(req, "/api/voice/voice"))
 
   res.type("text/xml").send(twiml.toString())
 }
 
 // Welcome greeting + speech gather entry point
 const handleVoiceEntry = async (req, res) => {
-  const twiml = new VoiceResponse()
+  const VR = await getVoiceResponse()
+  const twiml = new VR()
   const callSid = req.body.CallSid || "local-dev-call"
   const session = getSession(callSid)
   const alreadyWelcomed = Boolean(session?.data?.welcomed)
@@ -323,7 +341,8 @@ router.post("/incoming", validateTwilioSignature, handleIncoming)
 
 // Realtime incoming call via Twilio Media Streams
 router.post("/realtime/incoming", validateTwilioSignature, async (req, res) => {
-  const twiml = new VoiceResponse()
+  const VR = await getVoiceResponse()
+  const twiml = new VR()
   const callSid = req.body.CallSid || "local-dev-call"
   const phone = req.body.From;
   const calledNumber = req.body.To || ""
@@ -428,7 +447,8 @@ router.post("/realtime/incoming", validateTwilioSignature, async (req, res) => {
 // POST /api/voice/process is handled by server/routes/voice.ts (Gather loop + hangup on completed booking).
 
 router.post("/confirm", validateTwilioSignature, async (req, res) => {
-  const twiml = new VoiceResponse()
+  const VR = await getVoiceResponse()
+  const twiml = new VR()
   const callSid = req.body.CallSid || "local-dev-call"
 
   twiml.say(getBookingConfirmLead())
@@ -451,7 +471,8 @@ router.post("/confirm", validateTwilioSignature, async (req, res) => {
 
 // Book flow placeholder
 router.post("/book", validateTwilioSignature, async (req, res) => {
-  const vr = new VoiceResponse()
+  const VR = await getVoiceResponse()
+  const vr = new VR()
   const speech = req.body.SpeechResult || ""
 
   vr.say(

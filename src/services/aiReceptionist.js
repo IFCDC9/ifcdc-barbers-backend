@@ -1,4 +1,5 @@
 import OpenAI from "openai"
+import twilio from "twilio"
 import { detectIntent } from "./conversationBrain.js"
 import { routeTool } from "./toolRouter.js"
 import { detectLanguage } from "./languageDetection.js"
@@ -25,6 +26,13 @@ const AI_TIMEOUT_MS = Number(process.env.OPENAI_TIMEOUT_MS || 10000)
 const SPOKEN_SHOP_NAME = "I F C D C Barbers"
 const AI_QUOTA_BACKOFF_MS = Number(process.env.OPENAI_QUOTA_BACKOFF_MS || 300000)
 const aiBackoffUntilByShop = new Map()
+
+export const processReceptionistIncoming = (req, res) => {
+  const { twiml: { VoiceResponse } } = twilio
+  const twiml = new VoiceResponse()
+  twiml.say("Welcome to IFCDC Barbers, how can I help you?")
+  res.type("text/xml").send(twiml.toString())
+}
 
 const isQuotaError = (error) => {
   const statusCode = Number(error?.status || error?.code || 0)

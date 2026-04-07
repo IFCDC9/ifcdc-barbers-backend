@@ -1,4 +1,5 @@
 import db from "../db/db.js"
+import { ensureSubscriptionSchema } from "./subscriptionService.js"
 
 export async function getBarberById(barberId, shopId = null) {
   if (!barberId) return null
@@ -23,13 +24,30 @@ export async function getBarberById(barberId, shopId = null) {
 
 export async function listBarbers(shopId = null) {
   try {
+    await ensureSubscriptionSchema()
     const params = []
-    let sql = `SELECT barber_id, status, updated_at FROM barber_status`
+    let sql = `
+      SELECT
+        s.barber_id,
+        s.status,
+        s.updated_at,
+        sub.status AS subscription_status,
+        sub.trial_ends_at,
+        sub.current_period_end
+      FROM barber_status s
+      LEFT JOIN barber_subscriptions sub ON sub.barber_id = s.barber_id
+      WHERE
+        (
+          (LOWER(COALESCE(sub.status,'')) = 'trial' AND sub.trial_ends_at > NOW())
+          OR
+          (LOWER(COALESCE(sub.status,'')) = 'active' AND sub.current_period_end > NOW())
+        )
+    `
     if (shopId !== null && shopId !== undefined) {
-      sql += ` WHERE shop_id = $1`
+      sql += ` AND s.shop_id = $1`
       params.push(shopId)
     }
-    sql += ` ORDER BY barber_id ASC`
+    sql += ` ORDER BY s.barber_id ASC`
 
     const result = await db.query(sql, params)
     return result.rows || []

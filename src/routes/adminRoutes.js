@@ -2,6 +2,7 @@
 import express from "express"
 import db from "../db/db.js"
 import { requireAdmin } from "../middleware/requireAdmin.js"
+import { listSubscriptions, startTrial, activateMonthly } from "../services/subscriptionService.js"
 
 const router = express.Router()
 
@@ -91,6 +92,40 @@ router.get("/bookings", requireAdmin, async (req, res) => {
   } catch (err) {
     console.error("❌ Admin fetch error:", err)
     res.status(500).json({ error: "Failed to fetch bookings" })
+  }
+})
+
+// 💳 SUBSCRIPTIONS (admin protected)
+router.get("/subscriptions", requireAdmin, async (req, res) => {
+  try {
+    const activeOnly = String(req.query.activeOnly || "").trim() === "true"
+    const subs = await listSubscriptions({ activeOnly })
+    res.json({ ok: true, subscriptions: subs })
+  } catch (err) {
+    console.error("❌ Admin subscriptions error:", err)
+    res.status(500).json({ ok: false, error: "failed_to_fetch_subscriptions" })
+  }
+})
+
+router.post("/subscriptions/:barberId/start-trial", requireAdmin, async (req, res) => {
+  try {
+    const barberId = Number(req.params.barberId)
+    const days = Number(req.body?.days || 7)
+    const row = await startTrial(barberId, days)
+    res.json({ ok: true, subscription: row })
+  } catch (err) {
+    res.status(400).json({ ok: false, error: "start_trial_failed", message: err instanceof Error ? err.message : String(err) })
+  }
+})
+
+router.post("/subscriptions/:barberId/activate-monthly", requireAdmin, async (req, res) => {
+  try {
+    const barberId = Number(req.params.barberId)
+    const months = Number(req.body?.months || 1)
+    const row = await activateMonthly(barberId, months)
+    res.json({ ok: true, subscription: row })
+  } catch (err) {
+    res.status(400).json({ ok: false, error: "activate_monthly_failed", message: err instanceof Error ? err.message : String(err) })
   }
 })
 

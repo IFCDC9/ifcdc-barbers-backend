@@ -1,5 +1,4 @@
 import db from "../db/db.js"
-import twilio from "twilio"
 import { findAvailableBarber, getBarberStatusSummary } from "./barberService.js"
 import { getShopHoursReply, getShopInformationReply } from "./voiceCopy.js"
 import {
@@ -14,9 +13,18 @@ import {
 } from "./voiceCopy.js"
 
 const getTodayIso = () => new Date().toISOString().slice(0, 10)
-const twilioClient = process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN
-  ? twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN)
-  : null
+
+let twilioClientPromise = null
+const getTwilioClient = async () => {
+  if (!process.env.TWILIO_ACCOUNT_SID?.trim() || !process.env.TWILIO_AUTH_TOKEN?.trim()) return null
+  if (!twilioClientPromise) {
+    twilioClientPromise = (async () => {
+      const { default: twilio } = await import("twilio")
+      return twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN)
+    })()
+  }
+  return await twilioClientPromise
+}
 
 const buildStableBarberIdFromName = (barberName = "") => {
   const normalizedName = String(barberName).trim().toLowerCase()
@@ -758,7 +766,8 @@ export const sendSMS = async ({ to, message } = {}) => {
     }
   }
 
-  if (!twilioClient || !process.env.TWILIO_PHONE_NUMBER) {
+  const twilioClient = await getTwilioClient()
+  if (!twilioClient || !process.env.TWILIO_PHONE_NUMBER?.trim()) {
     return {
       responseText: getSMSNotConfiguredReply(),
       sent: false

@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS appointments (
   barber_id INTEGER NOT NULL,
   shop_id INTEGER,
   customer_name VARCHAR(255),
-  service VARCHAR(255),
+  service TEXT,
   appointment_time TIMESTAMP,
   price DECIMAL(10,2),
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -54,9 +54,21 @@ CREATE TABLE IF NOT EXISTS users (
   id SERIAL PRIMARY KEY,
   shop_id INTEGER,
   full_name VARCHAR(255),
+  email VARCHAR(255),
   phone_number VARCHAR(30) UNIQUE,
+  google_id VARCHAR(255),
+  avatar TEXT,
+  password_hash TEXT,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS users_email_unique
+ON users (email)
+WHERE email IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS users_google_id_unique
+ON users (google_id)
+WHERE google_id IS NOT NULL;
 
 -- Customers table (used by memoryService for phone-based upserts)
 CREATE TABLE IF NOT EXISTS customers (
@@ -83,8 +95,26 @@ CREATE TABLE IF NOT EXISTS bookings (
   payment_provider VARCHAR(50),
   paypal_order_id TEXT,
   paypal_capture_id TEXT,
+  payment_amount DECIMAL(10,2),
+  payment_currency VARCHAR(10),
   paid_at TIMESTAMP,
+  payment_verified_at TIMESTAMP,
   payment_payload JSONB,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Payment attempts audit log (PayPal, etc.)
+CREATE TABLE IF NOT EXISTS payment_attempts (
+  id SERIAL PRIMARY KEY,
+  provider VARCHAR(50) NOT NULL,
+  booking_id INTEGER,
+  attempt_type VARCHAR(50) NOT NULL, -- create_order | capture | verify | webhook
+  paypal_order_id TEXT,
+  paypal_capture_id TEXT,
+  status VARCHAR(50),
+  amount DECIMAL(10,2),
+  currency VARCHAR(10),
+  payload JSONB,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 

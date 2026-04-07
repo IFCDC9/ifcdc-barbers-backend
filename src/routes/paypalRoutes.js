@@ -1,166 +1,415 @@
 import express from "express"
-import { createPayPalOrder, capturePayPalOrder } from "../services/paypalService.js"
+import db from "../db/db.js"
+import {
+  createPayPalOrder,
+  capturePayPalOrder,
+  verifyPayPalPayment,
+  verifyPayPalWebhookSignature,
+} from "../services/paypalService.js"
+import { sendPaymentReceivedSMS } from "../services/smsService.js"
+import { sendBookingConfirmationEmail } from "../services/emailService.js"
+import { createPendingPayment, markPaymentFailed, markPaymentPaid, updatePaymentAmount } from "../services/paymentsStore.js"
+import paypalOrderRoutes from "./paypal.js"
 
 const router = express.Router()
 
-router.post("/create-paypal-order", async (req, res) => {
+router.use(paypalOrderRoutes)
+
+// Public: expose PayPal client id for JS SDK (safe to share).
+router.get("/client-id", (_req, res) => {
+  const clientId = String(process.env.PAYPAL_CLIENT_ID || "").trim()
+  if (!clientId) {
+    return res.status(500).json({ ok: false, error: "paypal_not_configured" })
+  }
+  return res.json({ ok: true, clientId })
+})
+
+/* =========================
+   Helpers
+========================= */
+
+const jsonError = (res, status, code, message, details) => {
+  return res.status(status).json({
+    ok: false,
+    success: false,
+    error: code,
+    message,
+    details,
+  })
+}
+
+const asId = (v) => {
+  const n = Number(v)
+  return Number.isFinite(n) && n > 0 ? n : null
+}
+
+const asPrice = (v) => {
+  const n = Number(v)
+  return Number.isFinite(n) && n > 0 ? Number(n.toFixed(2)) : null
+}
+
+let cachedAppointmentColumns = null
+let ensuredAppointmentSchema = false
+
+const ensureAppointmentSchema = async () => {
+  if (ensuredAppointmentSchema) return
+  ensuredAppointmentSchema = true
   try {
-    const { bookingId, price } = req.body
-    const data = await createPayPalOrder(bookingId, price)
-    return res.json(data)
+    await db.query(`
+      ALTER TABLE appointments
+        ADD COLUMN IF NOT EXISTS customer_phone TEXT,
+        ADD COLUMN IF NOT EXISTS customer_name TEXT,
+        ADD COLUMN IF NOT EXISTS email TEXT,
+        ADD COLUMN IF NOT EXISTS appointment_time TIMESTAMP,
+        ADD COLUMN IF NOT EXISTS payment_status TEXT,
+        ADD COLUMN IF NOT EXISTS payment_provider TEXT,
+        ADD COLUMN IF NOT EXISTS payment_amount NUMERIC,
+        ADD COLUMN IF NOT EXISTS payment_currency TEXT,
+        ADD COLUMN IF NOT EXISTS paypal_order_id TEXT,
+        ADD COLUMN IF NOT EXISTS paid_at TIMESTAMP,
+        ADD COLUMN IF NOT EXISTS payment_verified_at TIMESTAMP,
+        ADD COLUMN IF NOT EXISTS payment_payload JSONB
+    `)
+  } catch (e) {
+    console.warn("[paypal] appointment schema ensure failed:", e instanceof Error ? e.message : String(e))
+  } finally {
+    // Columns may have changed; force a refresh.
+    cachedAppointmentColumns = null
+  }
+}
+
+const getAppointmentColumns = async () => {
+  await ensureAppointmentSchema()
+  if (cachedAppointmentColumns) return cachedAppointmentColumns
+  const r = await db.query(
+    `SELECT column_name
+     FROM information_schema.columns
+     WHERE table_schema = 'public' AND table_name = 'appointments'`
+  )
+  cachedAppointmentColumns = new Set(r.rows.map((x) => x.column_name))
+  return cachedAppointmentColumns
+}
+
+const getApprovalUrl = (orderData) => {
+  const links = Array.isArray(orderData?.links) ? orderData.links : []
+  const approve = links.find((l) => l && String(l.rel) === "approve") || null
+  return approve?.href || null
+}
+
+const fetchAppointment = async (id) => {
+  const r = await db.query(`SELECT * FROM appointments WHERE id = $1 LIMIT 1`, [id])
+  return r.rows[0] || null
+}
+
+const updateAppointment = async (id, patch) => {
+  const cols = await getAppointmentColumns()
+  const fields = []
+  const values = []
+  let i = 1
+
+  for (const [k, v] of Object.entries(patch || {})) {
+    if (!cols.has(k)) continue
+    fields.push(`${k} = $${i}`)
+    values.push(v)
+    i += 1
+  }
+
+  if (!fields.length) return { updated: false, row: null }
+
+  values.push(id)
+  const sql = `UPDATE appointments SET ${fields.join(", ")} WHERE id = $${i} RETURNING *`
+  const r = await db.query(sql, values)
+  return { updated: r.rowCount > 0, row: r.rows[0] || null }
+}
+
+const isAlreadyPaid = (apt) => {
+  const status = String(apt?.payment_status || apt?.status || "").toLowerCase()
+  return status === "paid"
+}
+
+const isPendingPayment = (apt) => {
+  const status = String(apt?.payment_status || apt?.status || "").toLowerCase()
+  return status === "pending" || status === "pending_payment"
+}
+
+const sendConfirmationsBestEffort = async (apt) => {
+  const phone = apt?.customer_phone || apt?.phone || null
+  const email = apt?.email || null
+  const name = apt?.customer_name || apt?.client || apt?.customer || "Guest"
+  const service = apt?.service || null
+  const barberName = apt?.barber || null
+  const date = apt?.date ? String(apt.date).slice(0, 10) : null
+  const time = apt?.time ? String(apt.time).slice(0, 5) : null
+
+  // Payment completion SMS (required)
+  try { if (phone) await sendPaymentReceivedSMS({ to: phone }) } catch {}
+
+  // Keep email confirmation best-effort (doesn't hurt mobile flow)
+  try { if (email) await sendBookingConfirmationEmail({ to: email, name, service, barberName, date, time }) } catch {}
+}
+
+/* POST /create-order — implemented in ./paypal.js (mock; restore booking + PayPal SDK flow here when ready). */
+
+/* =========================
+   POST /capture-order
+   Input: orderId, bookingId
+   Output: paid + confirmed booking
+========================= */
+
+router.post("/capture-order", async (req, res) => {
+  try {
+    await ensureAppointmentSchema()
+    const orderId = String(req.body?.orderId || req.body?.orderID || "").trim()
+    const bookingId = asId(req.body?.bookingId)
+    if (!orderId) {
+      return jsonError(res, 400, "validation_failed", "orderId is required")
+    }
+
+    const apt = bookingId ? await fetchAppointment(bookingId) : null
+    if (bookingId && !apt) return jsonError(res, 404, "booking_not_found", "Appointment not found")
+    if (bookingId && isAlreadyPaid(apt)) {
+      return res.json({ ok: true, success: true, bookingId, alreadyPaid: true })
+    }
+
+    // Capture on PayPal (server-side)
+    let captured
+    try {
+      captured = await capturePayPalOrder(orderId, bookingId || null)
+    } catch (e) {
+      try { if (bookingId) await markPaymentFailed({ paypalOrderId: orderId, bookingId }) } catch {}
+      const status = Number(e?.status || 0)
+      const msg = e instanceof Error ? e.message : String(e)
+      // PayPal returns 404 when order doesn't exist (bad token / wrong env).
+      if (status === 404 || /does not exist/i.test(msg)) {
+        return jsonError(res, 400, "paypal_order_not_found", "PayPal order not found", { orderId })
+      }
+      return jsonError(res, 400, "payment_capture_failed", msg)
+    }
+    if (captured?.status !== "COMPLETED") {
+      try { if (bookingId) await markPaymentFailed({ paypalOrderId: orderId, bookingId }) } catch {}
+      return jsonError(res, 400, "payment_not_completed", "Payment not completed", { status: captured?.status || null })
+    }
+
+    const verified = await verifyPayPalPayment({ orderId, bookingId: bookingId || null })
+    if (!verified.ok) {
+      try {
+        if (bookingId) await markPaymentFailed({ paypalOrderId: orderId, bookingId })
+      } catch {}
+      return jsonError(res, 400, "payment_not_verified", "Payment could not be verified", verified)
+    }
+
+    const amount = asPrice(verified?.verified?.amount) || asPrice(apt?.payment_amount) || asPrice(apt?.price) || null
+    const currency = String(verified?.verified?.currency || "USD")
+
+    // Mark paid + persist orderId + amount
+    const updated = bookingId
+      ? await updateAppointment(bookingId, {
+        payment_status: "paid",
+        status: "paid",
+        payment_provider: "paypal",
+        payment_amount: amount,
+        payment_currency: currency,
+        paypal_order_id: orderId,
+        paid_at: new Date(),
+        payment_verified_at: new Date(),
+        payment_payload: verified?.details ? JSON.stringify(verified.details) : null,
+      })
+      : { updated: false, row: null }
+
+    // Normalized payments row → paid (idempotent)
+    try {
+      if (bookingId) {
+        if (amount) await updatePaymentAmount({ paypalOrderId: orderId, amount })
+        await markPaymentPaid({ paypalOrderId: orderId, bookingId })
+      }
+    } catch (e) {
+      console.warn("[paypal] payments update failed:", e instanceof Error ? e.message : String(e))
+    }
+
+    console.log("[paypal] capture-order ok", { orderId, bookingId: bookingId || null })
+
+    // Even if schema can’t store fields, we still treat payment as success, but booking won’t show paid state.
+    const fresh = bookingId ? (updated.row || (await fetchAppointment(bookingId))) : null
+    if (fresh) void sendConfirmationsBestEffort(fresh)
+
+    return res.json({
+      ok: true,
+      success: true,
+      bookingId: bookingId || null,
+      orderId,
+      booking: fresh,
+      captured,
+    })
   } catch (err) {
-    console.error("❌ Create Order Error:", err)
-    return res.status(500).json({ error: err.message || "PayPal order failed" })
+    console.error("[paypal] capture-order error:", err)
+    try {
+      const orderId = String(req.body?.orderId || "").trim()
+      const bookingId = asId(req.body?.bookingId)
+      if (orderId) await markPaymentFailed({ paypalOrderId: orderId, bookingId })
+    } catch {}
+    return jsonError(res, 500, "capture_failed", err instanceof Error ? err.message : String(err))
+  }
+})
+
+/**
+ * Manual dev helper:
+ * POST /api/paypal/test-capture
+ * Body: { orderId }
+ *
+ * Captures + verifies, then marks payment + appointment as paid.
+ */
+router.post("/test-capture", async (req, res) => {
+  try {
+    const orderId = String(req.body?.orderId || "").trim()
+    if (!orderId) return jsonError(res, 400, "validation_failed", "orderId is required")
+
+    // Verify first to infer bookingId (PayPal custom_id)
+    const verifiedBefore = await verifyPayPalPayment({ orderId })
+    if (!verifiedBefore.ok) {
+      try { await markPaymentFailed({ paypalOrderId: orderId }) } catch {}
+      return jsonError(res, 400, "payment_not_verified", "Payment could not be verified", verifiedBefore)
+    }
+
+    const bookingId = asId(verifiedBefore?.verified?.bookingId)
+    if (!bookingId) {
+      return jsonError(res, 400, "booking_id_missing", "PayPal order missing bookingId (custom_id)")
+    }
+
+    // Capture
+    let captured
+    try {
+      captured = await capturePayPalOrder(orderId, bookingId)
+    } catch (e) {
+      try { await markPaymentFailed({ paypalOrderId: orderId, bookingId }) } catch {}
+      const status = Number(e?.status || 0)
+      const msg = e instanceof Error ? e.message : String(e)
+      if (status === 404 || /does not exist/i.test(msg)) {
+        return jsonError(res, 400, "paypal_order_not_found", "PayPal order not found", { orderId })
+      }
+      return jsonError(res, 400, "payment_capture_failed", msg)
+    }
+
+    if (captured?.status !== "COMPLETED") {
+      try { await markPaymentFailed({ paypalOrderId: orderId, bookingId }) } catch {}
+      return jsonError(res, 400, "payment_not_completed", "Payment not completed", { status: captured?.status || null })
+    }
+
+    // Verify again for final truth + amount
+    const verified = await verifyPayPalPayment({ orderId, bookingId })
+    if (!verified.ok) {
+      try { await markPaymentFailed({ paypalOrderId: orderId, bookingId }) } catch {}
+      return jsonError(res, 400, "payment_not_verified", "Payment could not be verified", verified)
+    }
+
+    const apt = await fetchAppointment(bookingId)
+    const amount = asPrice(verified?.verified?.amount) || asPrice(apt?.price) || null
+    const currency = String(verified?.verified?.currency || "USD")
+
+    const updated = await updateAppointment(bookingId, {
+      payment_status: "paid",
+      status: "paid",
+      payment_provider: "paypal",
+      payment_amount: amount,
+      payment_currency: currency,
+      paypal_order_id: orderId,
+      paid_at: new Date(),
+      payment_verified_at: new Date(),
+      payment_payload: verified?.details ? JSON.stringify(verified.details) : null,
+    })
+
+    try {
+      if (amount) await updatePaymentAmount({ paypalOrderId: orderId, amount })
+      await markPaymentPaid({ paypalOrderId: orderId, bookingId })
+    } catch (e) {
+      console.warn("[paypal] payments update failed:", e instanceof Error ? e.message : String(e))
+    }
+
+    console.log("Payment marked as PAID")
+
+    const fresh = updated.row || (await fetchAppointment(bookingId))
+    return res.json({ ok: true, success: true, bookingId, orderId, booking: fresh })
+  } catch (err) {
+    console.error("[paypal] test-capture error:", err)
+    return jsonError(res, 500, "test_capture_failed", err instanceof Error ? err.message : String(err))
+  }
+})
+
+/* =========================
+   Backwards-compatible aliases
+========================= */
+
+router.post("/create-paypal-order", async (req, res) => {
+  // Old clients call this with { bookingId, price } and expect the raw PayPal payload.
+  try {
+    const bookingId = asId(req.body?.bookingId)
+    const price = asPrice(req.body?.price)
+    if (!bookingId || !price) {
+      return jsonError(res, 400, "validation_failed", "bookingId and price are required")
+    }
+    const order = await createPayPalOrder(bookingId, price)
+    return res.json(order)
+  } catch (err) {
+    return jsonError(res, 500, "create_order_failed", err instanceof Error ? err.message : String(err))
   }
 })
 
 router.post("/capture-paypal-order", async (req, res) => {
+  // Old clients call this with { orderId, bookingId } and expect { success }.
   try {
-    const { orderId, bookingId } = req.body
+    const orderId = String(req.body?.orderId || "").trim()
+    const bookingId = asId(req.body?.bookingId)
+    if (!orderId) return jsonError(res, 400, "validation_failed", "orderId is required")
     const data = await capturePayPalOrder(orderId, bookingId)
-
     if (data?.status === "COMPLETED") {
-      console.log("💰 Payment confirmed for booking:", bookingId)
-      return res.json({ success: true })
+      return res.json({ success: true, paypal: data })
     }
-
-    return res.status(400).json({ error: "Payment not completed" })
+    return jsonError(res, 400, "payment_not_completed", "Payment not completed", { status: data?.status || null })
   } catch (err) {
-    console.error("❌ Capture Error:", err)
-    return res.status(500).json({ error: err.message || "Capture failed" })
+    return jsonError(res, 500, "capture_failed", err instanceof Error ? err.message : String(err))
   }
 })
 
-// 🌐 GET /checkout — server-rendered PayPal button page (used by mobile WebView)
-router.get("/checkout", (req, res) => {
-  const { bookingId, price, backendUrl } = req.query
-  const clientId = process.env.PAYPAL_CLIENT_ID
+/* =========================
+   Verification + Webhook (kept)
+========================= */
 
-  if (!bookingId || !price) {
-    return res.status(400).send("<h3>Missing bookingId or price</h3>")
+router.post("/verify", async (req, res) => {
+  try {
+    const { orderId, bookingId, expectedAmount } = req.body || {}
+    const result = await verifyPayPalPayment({ orderId, bookingId, expectedAmount })
+    if (!result.ok) return res.status(400).json(result)
+    return res.json(result)
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err instanceof Error ? err.message : String(err) })
   }
+})
 
-  // Resolve the backend URL for API calls from within the page
-  const apiBase =
-    backendUrl ||
-    process.env.VOICE_WEBHOOK_BASE_URL ||
-    `http://localhost:${process.env.PORT || 3000}`
-
-  const html = `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>IFCDC Barbers — Checkout</title>
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: #0a0a0a;
-      color: #f5f5f5;
-      min-height: 100vh;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      padding: 24px;
+router.post("/webhook", async (req, res) => {
+  try {
+    const webhookEvent = req.body
+    const sig = await verifyPayPalWebhookSignature({ headers: req.headers, webhookEvent })
+    if (String(sig?.verification_status || "").toUpperCase() !== "SUCCESS") {
+      return res.status(400).json({ ok: false, error: "invalid_signature" })
     }
-    .card {
-      background: #1a1a1a;
-      border-radius: 16px;
-      padding: 32px 24px;
-      width: 100%;
-      max-width: 400px;
-      box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+
+    const eventType = String(webhookEvent?.event_type || "")
+    const resource = webhookEvent?.resource || {}
+    const orderId =
+      resource?.supplementary_data?.related_ids?.order_id
+      || resource?.supplementary_data?.related_ids?.checkout_order_id
+      || resource?.invoice_id
+      || null
+
+    if (eventType === "PAYMENT.CAPTURE.COMPLETED" && orderId) {
+      const verified = await verifyPayPalPayment({ orderId })
+      if (!verified.ok) return res.status(200).json({ ok: true, ignored: true, reason: verified.status })
+      return res.status(200).json({ ok: true, verified: verified.verified })
     }
-    .logo { font-size: 28px; font-weight: 800; color: #f5c842; letter-spacing: 1px; margin-bottom: 4px; }
-    .subtitle { font-size: 14px; color: #888; margin-bottom: 24px; }
-    .divider { border: none; border-top: 1px solid #2a2a2a; margin: 20px 0; }
-    .row { display: flex; justify-content: space-between; font-size: 15px; margin-bottom: 10px; }
-    .row .label { color: #aaa; }
-    .row .value { font-weight: 600; }
-    .total .value { color: #f5c842; font-size: 20px; }
-    #paypal-button-container { margin-top: 24px; }
-    #status { text-align: center; padding: 16px; border-radius: 10px; font-size: 15px; display: none; }
-    #status.success { background: #1a3a1a; color: #5cb85c; display: block; }
-    #status.error   { background: #3a1a1a; color: #e05252; display: block; }
-  </style>
-</head>
-<body>
-  <div class="card">
-    <div class="logo">✂️ IFCDC</div>
-    <div class="subtitle">Secure Checkout</div>
-    <hr class="divider" />
-    <div class="row"><span class="label">Booking #</span><span class="value">${bookingId}</span></div>
-    <div class="row"><span class="label">Service</span><span class="value">Haircut</span></div>
-    <div class="row total"><span class="label">Total</span><span class="value">$${price}</span></div>
-    <hr class="divider" />
-    <div id="paypal-button-container"></div>
-    <div id="status"></div>
-  </div>
 
-  <script src="https://www.paypal.com/sdk/js?client-id=${clientId}&currency=USD"></script>
-  <script>
-    const BACKEND = "${apiBase}";
-    const bookingId = "${bookingId}";
-    const price = "${price}";
-    const statusEl = document.getElementById("status");
-
-    paypal.Buttons({
-      createOrder: async () => {
-        const res = await fetch(BACKEND + "/api/paypal/create-paypal-order", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ bookingId, price })
-        });
-        const data = await res.json();
-        if (!data.id) throw new Error(data.error || "Order creation failed");
-        return data.id;
-      },
-
-      onApprove: async (data) => {
-        const res = await fetch(BACKEND + "/api/paypal/capture-paypal-order", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ orderId: data.orderID })
-        });
-        const result = await res.json();
-        if (result.success) {
-          statusEl.className = "success";
-          statusEl.textContent = "✅ Payment confirmed! Your booking is set.";
-          // Notify React Native WebView if running in-app
-          if (window.ReactNativeWebView) {
-            window.ReactNativeWebView.postMessage(JSON.stringify({
-              type: "PAYMENT_SUCCESS",
-              bookingId,
-              orderId: data.orderID
-            }));
-          }
-        } else {
-          throw new Error("Capture failed");
-        }
-      },
-
-      onError: (err) => {
-        statusEl.className = "error";
-        statusEl.textContent = "❌ Payment failed. Please try again.";
-        if (window.ReactNativeWebView) {
-          window.ReactNativeWebView.postMessage(JSON.stringify({ type: "PAYMENT_ERROR", error: String(err) }));
-        }
-      },
-
-      onCancel: () => {
-        if (window.ReactNativeWebView) {
-          window.ReactNativeWebView.postMessage(JSON.stringify({ type: "PAYMENT_CANCELLED" }));
-        }
-      }
-    }).render("#paypal-button-container");
-  </script>
-</body>
-</html>`
-
-  res.setHeader("Content-Type", "text/html")
-  res.send(html)
+    return res.status(200).json({ ok: true, received: true, eventType })
+  } catch (err) {
+    return res.status(200).json({ ok: false, error: err instanceof Error ? err.message : String(err) })
+  }
 })
 
 export default router

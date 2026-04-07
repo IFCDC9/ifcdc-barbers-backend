@@ -5,7 +5,9 @@ const DEFAULT_ACTIVE_BARBERS = Number(process.env.DEFAULT_ACTIVE_BARBERS || 1)
 
 const ensureSupabase = () => {
   if (!supabase) {
-    throw new Error("Supabase is not configured. Set SUPABASE_URL and SUPABASE_ANON_KEY.")
+    throw new Error(
+      "Supabase is not configured. Set SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY or SUPABASE_ANON_KEY."
+    )
   }
 }
 
