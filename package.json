@@ -6,7 +6,7 @@
   "scripts": {
     "predev": "lsof -ti:5050 | xargs kill -9 2>/dev/null || true; lsof -ti:3000 | xargs kill -9 2>/dev/null || true",
     "postinstall": "node scripts/fix-ngrok-bin.js",
-    "start": "node src/server.js",
+    "start": "node server.js",
     "build": "node -e \"console.log('[build] backend-only; skip client bundle on CI unless client/ is present')\"",
     "setup": "npm install && cd client && npm install && npm run build",
     "dev": "node --watch src/server.js",

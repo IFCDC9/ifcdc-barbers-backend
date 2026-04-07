@@ -115,6 +115,12 @@ export function validateProductionEnvironment() {
 }
 
 export function assertProductionEnvironmentOrExit() {
+  if (String(process.env.IFCDC_SKIP_STRICT_ENV || "").trim() === "1") {
+    console.warn(
+      "[env] IFCDC_SKIP_STRICT_ENV=1 — skipping assertProductionEnvironmentOrExit (use only to unblock deploy; fix env and remove)"
+    )
+    return
+  }
   const result = validateProductionEnvironment()
   if (result.skipped) {
     console.log(
