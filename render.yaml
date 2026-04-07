@@ -1,0 +1,36 @@
+# IFCDC Barbers — Render Web Service
+# https://render.com/docs/blueprint-spec
+#
+# After deploy: copy your service URL (e.g. https://ifcdc-barbers-backend.onrender.com)
+# into Twilio → Voice webhook: POST https://<that-host>/voice
+#
+# Set these in the Render dashboard (Environment) — do not commit secrets:
+#   PAYPAL_CLIENT_ID, PAYPAL_SECRET (checkout)
+#   DATABASE_URL (Supabase / Postgres)
+#   TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER (recommended)
+#   OPENAI_API_KEY, JWT_SECRET, GOOGLE_CLIENT_ID (if used)
+#   SUPABASE_URL
+#   SUPABASE_PUBLISHABLE_KEY or SUPABASE_ANON_KEY (public API key)
+#   SUPABASE_SECRET_KEY or SUPABASE_SERVICE_ROLE_KEY (server-only)
+#
+# Optional: PUBLIC_BASE_URL=https://<your-service>.onrender.com
+# (If unset, the app uses RENDER_EXTERNAL_URL from Render automatically.)
+
+services:
+  - type: web
+    name: ifcdc-barbers-backend
+    runtime: node
+    region: oregon
+    plan: starter
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: "22.12.0"
+      - key: NODE_ENV
+        value: production
+      # Set ADMIN_SECRET, DATABASE_URL, Supabase keys, Twilio, OPENAI in the Render dashboard.
+      - key: SUPABASE_STORAGE_BUCKET
+        value: barber-styles
+      # Backend-only (no Vite build on Render): add SKIP_VITE_ENV_VALIDATION=true
