@@ -80,12 +80,12 @@ const PaymentScreen = ({
 
       const data = (await response.json()) as any;
 
-      if (!response.ok || !data?.booking?.id) {
+      const bookingId =
+        data?.appointment?.id ??
+        (typeof data?.booking === 'object' && data?.booking != null ? (data.booking as { id?: number }).id : undefined);
+      if (!response.ok || bookingId == null) {
         throw new Error(data?.message || data?.error || 'Booking creation failed');
       }
-
-      const { booking } = data;
-      const bookingId = booking.id;
       setBookingId(String(bookingId));
       setCheckoutReady(true);
     } catch (error) {

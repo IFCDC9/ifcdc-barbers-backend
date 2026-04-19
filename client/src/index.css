@@ -1,0 +1,8 @@
+/* Avoid blank white flash before React + Vite paint (common “white screen” report). */
+html,
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: #0b0b0f;
+  color: #ffffff;
+}

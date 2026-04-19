@@ -180,6 +180,39 @@ export default function BarberSettings() {
     loadAll();
   }, [loadAll]);
 
+  const quickLinksCard = (
+    <Card style={{ marginTop: 16 }}>
+      <CardTitle>Quick links</CardTitle>
+      <p style={{ fontSize: 13, color: theme.colors.muted, marginTop: 8, marginBottom: 12 }}>
+        Customer booking reads live deposit rules from this shop via the public pricing API once you save.
+      </p>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+        <Link to="/booking" style={{ color: theme.colors.text, fontWeight: 800, fontSize: 14 }}>
+          Open booking →
+        </Link>
+        <Link to="/styles" style={{ color: theme.colors.text, fontWeight: 800, fontSize: 14 }}>
+          Browse styles →
+        </Link>
+        <button
+          type="button"
+          onClick={() => loadAll()}
+          style={{
+            background: "transparent",
+            border: `1px solid ${theme.colors.border}`,
+            color: theme.colors.muted,
+            fontWeight: 800,
+            fontSize: 13,
+            padding: "8px 12px",
+            borderRadius: theme.radius.sm,
+            cursor: "pointer",
+          }}
+        >
+          Reload data
+        </button>
+      </div>
+    </Card>
+  );
+
   const saveProfile = async () => {
     setStatus("");
     try {
@@ -381,6 +414,8 @@ export default function BarberSettings() {
           ) : null
         }
       />
+
+      {quickLinksCard}
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 16 }}>
         {tabs.map((t) => (

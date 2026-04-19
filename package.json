@@ -1,83 +1,32 @@
 {
   "name": "ifcdc-barbers-backend",
   "version": "1.0.0",
-  "description": "IFCDC Barbers Backend API",
-  "main": "index.js",
+  "private": true,
+  "type": "module",
   "scripts": {
-    "predev": "lsof -ti:5050 | xargs kill -9 2>/dev/null || true; lsof -ti:3000 | xargs kill -9 2>/dev/null || true",
-    "postinstall": "node scripts/fix-ngrok-bin.js",
     "start": "node server.js",
-    "build": "node -e \"console.log('[build] backend-only; skip client bundle on CI unless client/ is present')\"",
-    "setup": "npm install && cd client && npm install && npm run build",
-    "dev": "node --watch src/server.js",
-    "dev:api": "node src/server.js",
-    "dev:server": "node src/server.js",
-    "dev:web": "cd client && npm run dev",
-    "dev:full": "concurrently -k -n api,web -c blue,green \"npm run dev\" \"node scripts/wait-for-api.mjs && npm run dev:web\"",
-    "visible": "echo 'API: npm run dev:api (no nodemon) or npm run dev — host 0.0.0.0:5050. Web: npm run dev:web — Vite LAN (default :5174). Mobile: npm run lan-ip'",
-    "pm2:start": "npx pm2 start ecosystem.config.cjs",
-    "pm2:restart": "npx pm2 restart ifcdc-backend",
-    "pm2:logs": "npx pm2 logs ifcdc-backend",
-    "pm2:stop": "npx pm2 stop ifcdc-backend",
-    "pm2:save": "npx pm2 save",
-    "expo": "node scripts/run-expo.cjs",
-    "expo:start": "node scripts/run-expo.cjs start",
-    "expo:tunnel": "node scripts/run-expo.cjs start --tunnel",
-    "expo:tunnel:clear": "node scripts/run-expo.cjs start --tunnel --clear",
-    "expo:lan": "node scripts/run-expo.cjs start --lan",
-    "expo:lan:clear": "node scripts/run-expo.cjs start --lan --clear",
-    "expo:lan:clear:sim": "env REACT_NATIVE_PACKAGER_HOSTNAME=127.0.0.1 node scripts/run-expo.cjs start --lan --clear",
-    "mobile": "npm run expo:start",
-    "mobile:tunnel": "npm run expo:tunnel",
-    "mobile:lan": "npm run expo:lan",
-    "mobile:ios": "node scripts/run-expo.cjs start --ios",
-    "expo:ios:lan": "node scripts/run-expo.cjs start --lan --clear --ios",
-    "mobile:android": "node scripts/run-expo.cjs start --android",
-    "lan-ip": "node scripts/lan-ip.mjs",
-    "start:backend": "node backend/server.js"
+    "dev": "node server.js",
+    "dev:api": "node server.js",
+    "dev:client": "npm run dev --prefix client -- --host",
+    "dev:all": "concurrently -n api,web -c blue,green \"node server.js\" \"npm run dev --prefix client -- --host\"",
+    "test:resend": "node scripts/test-resend.cjs",
+    "test:paypal": "node scripts/verify-paypal-oauth.cjs",
+    "set-super-admin-password": "node scripts/setSuperAdminPassword.mjs"
   },
   "dependencies": {
     "@paypal/checkout-server-sdk": "^1.0.3",
-    "@supabase/supabase-js": "^2.101.1",
     "bcryptjs": "^3.0.3",
-    "cors": "^2.8.6",
-    "dotenv": "^16.6.1",
-    "express": "^4.22.1",
-    "express-async-errors": "^3.1.1",
-    "google-auth-library": "^10.6.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2",
+    "express-session": "^1.19.0",
     "jsonwebtoken": "^9.0.3",
-    "multer": "^2.1.1",
-    "nodemailer": "^8.0.4",
-    "openai": "^6.33.0",
+    "multer": "^1.4.5-lts.1",
     "pg": "^8.20.0",
-    "sentiment": "^5.0.2",
-    "socket.io": "^4.8.1",
-    "twilio": "^5.13.0",
-    "utils-merge": "^1.0.1",
-    "ws": "^8.18.0"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/IFCDC9/ifcdc-barbers-backend.git"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "module",
-  "engines": {
-    "node": ">=20"
-  },
-  "bugs": {
-    "url": "https://github.com/IFCDC9/ifcdc-barbers-backend/issues"
-  },
-  "homepage": "https://github.com/IFCDC9/ifcdc-barbers-backend#readme",
-  "overrides": {
-    "debug": "4.3.4"
+    "resend": "^6.10.0",
+    "twilio": "^5.13.1"
   },
   "devDependencies": {
-    "concurrently": "^9.2.1",
-    "ngrok": "^5.0.0-beta.2",
-    "nodemon": "^3.1.14",
-    "pm2": "^5.4.3"
+    "concurrently": "^9.1.2"
   }
 }

@@ -1,0 +1,39 @@
+@keyframes pulse {
+  0% {
+    box-shadow: 0 0 10px gold;
+  }
+  50% {
+    box-shadow: 0 0 25px gold;
+  }
+  100% {
+    box-shadow: 0 0 10px gold;
+  }
+}
+
+#aura-button {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  background: gold;
+  color: black;
+  border-radius: 50%;
+  width: 60px;
+  height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: bold;
+  z-index: 9999;
+  cursor: pointer;
+  animation: pulse 2s infinite;
+  user-select: none;
+  border: none;
+  font-family: inherit;
+  font-size: 11px;
+  letter-spacing: 0.5px;
+}
+
+#aura-button:focus-visible {
+  outline: 2px solid #d4af37;
+  outline-offset: 2px;
+}

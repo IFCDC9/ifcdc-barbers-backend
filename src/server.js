@@ -10,7 +10,11 @@ const bootImport = async (label, importer) => {
 }
 
 const dotenv = (await bootImport("dotenv", () => import("dotenv"))).default
-dotenv.config()
+const nodePath = await import("node:path")
+const nodeUrl = await import("node:url")
+const __rootDir = nodePath.join(nodePath.dirname(nodeUrl.fileURLToPath(import.meta.url)), "..")
+dotenv.config({ path: nodePath.join(__rootDir, ".env") })
+console.log("RESEND KEY STATUS:", process.env.RESEND_API_KEY ? "LOADED" : "MISSING")
 
 /** Render sets RENDER_EXTERNAL_URL (https://your-service.onrender.com). Use it for Twilio TwiML redirects if PUBLIC_BASE_URL is unset. */
 if (!process.env.PUBLIC_BASE_URL?.trim() && process.env.RENDER_EXTERNAL_URL?.trim()) {
@@ -246,6 +250,23 @@ app.get("/health", (_req, res) => {
 })
 
 /**
+ * IFCDC Vite client (`client/`) calls POST /bookings and GET /barbers at the host root — not /api/*.
+ */
+{
+  const { createRequire } = await import("module")
+  const require = createRequire(import.meta.url)
+  const bookingRoutes = require("../bookingRoutesMinimal.cjs")
+  app.use("/", bookingRoutes)
+}
+{
+  const { mountMinimalIfcdcApi } = await import("../minimalIfcdcApi.js")
+  mountMinimalIfcdcApi(app, {
+    serveUploads: false,
+    uploadDir: nodePath.join(__rootDir, "backend", "uploads"),
+  })
+}
+
+/**
  * Login — IFCDC_LOGIN_BYPASS=1 skips credential check. Otherwise admin@ifcdc.com / 1234.
  */
 app.post("/auth/login", (req, res) => {
@@ -464,6 +485,62 @@ apiRouter.post("/push/register", async (req, res) => {
   pushTokens.add(token)
   res.json({ ok: true, count: pushTokens.size })
 })
+
+/** GET|POST /api/test-email — Resend (aligned with root `server.js`). */
+{
+  const { createRequire } = await import("module")
+  const path = await import("node:path")
+  const { fileURLToPath } = await import("node:url")
+  const require = createRequire(import.meta.url)
+  const rootDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..")
+  const { getResend, getMailFrom, sendEmail } = require(path.join(rootDir, "emailResend.cjs"))
+
+  async function runApiTestEmail(to, res) {
+    console.log(
+      "[EMAIL] test-email: RESEND_API_KEY:",
+      getResend() ? "LOADED" : "MISSING",
+      "MAIL_FROM:",
+      getMailFrom() || "MISSING"
+    )
+    const result = await sendEmail({
+      to,
+      subject: "IFCDC System Test",
+      html: "<p>IFCDC transactional email test ✅</p>",
+      label: "test-email",
+    })
+    if (result.error) {
+      const msg = result.error.message || String(result.error)
+      console.error("[EMAIL ERROR]", msg)
+      const isConfig = /RESEND_API_KEY|MAIL_FROM/i.test(msg)
+      return res.status(isConfig ? 503 : 200).json({ success: false, error: msg })
+    }
+    return res.json({ success: true, to, messageId: result?.data?.id ?? null })
+  }
+
+  apiRouter.get("/test-email", async (req, res) => {
+    const to = String(req.query.to || req.query.email || "").trim()
+    if (!to) {
+      return res.status(400).json({
+        success: false,
+        error: "to_required",
+        message: "Use GET /api/test-email?to=you@example.com",
+      })
+    }
+    return runApiTestEmail(to, res)
+  })
+
+  apiRouter.post("/test-email", async (req, res) => {
+    const to = String(req.body?.to || req.query?.to || "").trim()
+    if (!to) {
+      return res.status(400).json({
+        success: false,
+        error: "to_required",
+        message: 'Send JSON { "to": "you@example.com" }',
+      })
+    }
+    return runApiTestEmail(to, res)
+  })
+}
 
 apiRouter.post("/push/test", async (req, res) => {
   const token = String(req.body?.token || "").trim()
@@ -826,6 +903,7 @@ const PORT = Number(process.env.PORT) || 5050
 
 // Bind all interfaces so phones / LAN can reach the API (not localhost-only).
 server.listen(PORT, "0.0.0.0", () => {
+  console.log("Server running on port 5050")
   console.log(`Backend running on http://0.0.0.0:${PORT}`)
   console.log(`Listening: http://0.0.0.0:${PORT} (network open)`)
   if (apiOnly) {

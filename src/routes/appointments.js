@@ -1,11 +1,28 @@
 import express from "express"
+import { createRequire } from "node:module"
+import { fileURLToPath } from "node:url"
+import path from "node:path"
 import db from "../db/db.js"
 import { triggerAutoFill } from "../services/autoFillService.js"
 import { getDemandLevel } from "../services/demandService.js"
 import { calculateDynamicPrice } from "../services/pricingService.js"
 import { sendAppointmentConfirmedSMS } from "../services/smsService.js"
-import { sendBookingConfirmationEmail } from "../services/emailService.js"
 import { isBarberSubscribed } from "../services/subscriptionService.js"
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const require = createRequire(import.meta.url)
+/** Same as GET /api/test-email — `sendEmail({ to, subject, html })` in `emailResend.cjs`. */
+const { sendEmail } = require(path.join(__dirname, "../../emailResend.cjs"))
+
+const BOOKING_CONFIRM_SUBJECT = "Booking Confirmation - IFCDC Barbers"
+
+function escapeHtmlAttr(s) {
+  return String(s ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+}
 
 const router = express.Router()
 
@@ -451,11 +468,65 @@ const handleCreate = async (req, res) => {
       // best-effort
     }
 
+    /** Resend — same `sendEmail` as /api/test-email; never fails HTTP create. */
+    let emailDelivery = "failed"
+    if (email && String(email).includes("@")) {
+      console.log("[BOOKING EMAIL] Sending to:", email)
+      const e = escapeHtmlAttr
+      const confirmationHtml = `
+<div style="font-family:system-ui,sans-serif;line-height:1.5">
+  <h2 style="margin:0 0 12px;">${e(BOOKING_CONFIRM_SUBJECT)}</h2>
+  <p>Hi ${e(customerName)},</p>
+  <p>Your appointment is saved <strong>(pending payment)</strong>.</p>
+  <ul>
+    <li><b>Service:</b> ${e(service)}</li>
+    <li><b>Barber:</b> ${e(barberName || "TBD")}</li>
+    <li><b>Date:</b> ${e(date)}</li>
+    <li><b>Time:</b> ${e(time)}</li>
+    ${appointment?.id != null ? `<li><b>Reference:</b> ${e(String(appointment.id))}</li>` : ""}
+  </ul>
+  <p>Thank you,<br/>IFCDC Barbers</p>
+</div>`.trim()
+      const confirmationText = [
+        BOOKING_CONFIRM_SUBJECT,
+        "",
+        `Hi ${customerName},`,
+        "",
+        `Service: ${service}`,
+        `Barber: ${barberName || "TBD"}`,
+        `Date: ${date}`,
+        `Time: ${time}`,
+        appointment?.id != null ? `Reference: ${appointment.id}` : null,
+        "",
+        "Thank you,",
+        "IFCDC Barbers",
+      ]
+        .filter((line) => line != null && line !== "")
+        .join("\n")
+
+      const mailResult = await sendEmail({
+        to: email,
+        subject: BOOKING_CONFIRM_SUBJECT,
+        html: confirmationHtml,
+        text: confirmationText,
+        label: "appointments-create",
+      })
+      if (mailResult.error) {
+        const em = mailResult.error.message || String(mailResult.error)
+        console.error("[BOOKING EMAIL ERROR]", em)
+        emailDelivery = "failed"
+      } else {
+        emailDelivery = "sent"
+      }
+    }
+
     return res.status(201).json({
       ok: true,
       success: true,
       message: "Booking created (pending payment)",
-      booking: appointment,
+      booking: true,
+      email: emailDelivery,
+      appointment,
       pricing,
     })
   } catch (error) {

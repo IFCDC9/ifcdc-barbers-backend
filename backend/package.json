@@ -1,0 +1,11 @@
+{
+  "name": "ifcdc-barbers-backend-legacy",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Runs the API from the repo root (avoids iCloud timeouts on backend/server.js).",
+  "scripts": {
+    "start": "node ../server.js",
+    "dev": "node ../server.js"
+  },
+  "dependencies": {}
+}
