@@ -1,0 +1,696 @@
+import React from "react";
+import { Link } from "react-router-dom";
+import { Page, PageHeader } from "../components/ui/Page.jsx";
+import { Card, CardTitle } from "../components/ui/Card.jsx";
+import { Button } from "../components/ui/Button.jsx";
+import { theme } from "../components/ui/theme.js";
+import { apiGet, apiPut, apiPost, apiDelete, apiUrl, fetchWithTimeout } from "../lib/api.js";
+
+function authHeaders() {
+  try {
+    const token = window.localStorage.getItem("token");
+    if (token) return { Authorization: `Bearer ${token}` };
+  } catch {
+    /* ignore */
+  }
+  return {};
+}
+
+function readUser() {
+  try {
+    return JSON.parse(window.localStorage.getItem("user") || "null");
+  } catch {
+    return null;
+  }
+}
+
+function defaultWeekAvailability() {
+  return [0, 1, 2, 3, 4, 5, 6].map((day_of_week) => ({
+    day_of_week,
+    start_time: "09:00",
+    end_time: "18:00",
+    is_off: day_of_week === 0 || day_of_week === 6,
+  }));
+}
+
+const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+const tabBtn = (active) => ({
+  padding: "10px 14px",
+  borderRadius: theme.radius.sm,
+  border: `1px solid ${active ? theme.colors.indigoBorder : theme.colors.border}`,
+  background: active ? theme.colors.indigoBg : theme.colors.subtle,
+  color: theme.colors.text,
+  fontWeight: 800,
+  fontSize: 13,
+  cursor: "pointer",
+});
+
+const inputStyle = {
+  width: "100%",
+  padding: "10px 12px",
+  borderRadius: theme.radius.sm,
+  border: `1px solid ${theme.colors.border}`,
+  backgroundColor: "rgba(0,0,0,0.25)",
+  color: theme.colors.text,
+  fontSize: 14,
+};
+
+export default function BarberSettings() {
+  const user = readUser();
+  const role = String(user?.role || "");
+  const isAdmin = role === "admin" || role === "super_admin";
+
+  const [tab, setTab] = React.useState("profile");
+  const [adminBarberId, setAdminBarberId] = React.useState(() => {
+    if (typeof window === "undefined") return "";
+    return window.sessionStorage.getItem("ifcdc_admin_barber_id") || "";
+  });
+  const [barberList, setBarberList] = React.useState([]);
+  const [status, setStatus] = React.useState("");
+  const [loading, setLoading] = React.useState(false);
+
+  const [profile, setProfile] = React.useState({
+    name: "",
+    bio: "",
+    profile_image: "",
+    logo: "",
+    location: "",
+    phone: "",
+  });
+  const [services, setServices] = React.useState([]);
+  const [svcDraft, setSvcDraft] = React.useState({ name: "", price: "25", duration_minutes: "30" });
+  const [availability, setAvailability] = React.useState(() => defaultWeekAvailability());
+  const [settings, setSettings] = React.useState({
+    theme_color: "#FFD700",
+    booking_deposit_enabled: false,
+    deposit_amount: 10,
+    payment_method: "paypal",
+    aura_enabled: true,
+    aura_voice_type: "Polly.Joanna",
+    language: "en",
+  });
+  const [clients, setClients] = React.useState([]);
+  const [clientDraft, setClientDraft] = React.useState({ name: "", phone: "", notes: "" });
+  const [media, setMedia] = React.useState([]);
+  const [mediaFile, setMediaFile] = React.useState(null);
+
+  const scopeQuery = React.useMemo(() => {
+    if (!isAdmin) return "";
+    const id = String(adminBarberId || "").trim();
+    return id ? `?barberId=${encodeURIComponent(id)}` : "";
+  }, [isAdmin, adminBarberId]);
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.sessionStorage.setItem("ifcdc_admin_barber_id", String(adminBarberId || ""));
+  }, [adminBarberId]);
+
+  React.useEffect(() => {
+    if (!isAdmin) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const j = await apiGet("/api/barber/list", { headers: authHeaders() });
+        if (!cancelled && Array.isArray(j?.barbers)) {
+          setBarberList(j.barbers);
+          if (!adminBarberId && j.barbers[0]?.id != null) {
+            setAdminBarberId(String(j.barbers[0].id));
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isAdmin]);
+
+  const loadAll = React.useCallback(async () => {
+    if (isAdmin && !String(adminBarberId || "").trim()) {
+      setStatus("Select a barber (admin).");
+      return;
+    }
+    setLoading(true);
+    setStatus("");
+    const h = authHeaders();
+    const q = scopeQuery;
+    try {
+      const [p, s, a, st, c, m] = await Promise.all([
+        apiGet(`/api/barber/profile${q}`, { headers: h }),
+        apiGet(`/api/barber/services${q}`, { headers: h }),
+        apiGet(`/api/barber/availability${q}`, { headers: h }),
+        apiGet(`/api/barber/settings${q}`, { headers: h }),
+        apiGet(`/api/barber/clients${q}`, { headers: h }),
+        apiGet(`/api/barber/media${q}`, { headers: h }),
+      ]);
+      const pr = p?.profile || {};
+      setProfile({
+        name: pr.name || "",
+        bio: pr.bio || "",
+        profile_image: pr.profile_image || "",
+        logo: pr.logo || "",
+        location: pr.location || "",
+        phone: pr.phone || "",
+      });
+      setServices(Array.isArray(s?.services) ? s.services : []);
+      const av = Array.isArray(a?.availability) ? a.availability : [];
+      setAvailability(av.length ? av : defaultWeekAvailability());
+      const se = st?.settings || {};
+      setSettings({
+        theme_color: se.theme_color || "#FFD700",
+        booking_deposit_enabled: Boolean(se.booking_deposit_enabled),
+        deposit_amount: Number(se.deposit_amount) || 0,
+        payment_method: se.payment_method || "paypal",
+        aura_enabled: se.aura_enabled !== false,
+        aura_voice_type: se.aura_voice_type || "Polly.Joanna",
+        language: se.language || "en",
+      });
+      setClients(Array.isArray(c?.clients) ? c.clients : []);
+      setMedia(Array.isArray(m?.media) ? m.media : []);
+    } catch (e) {
+      setStatus(e instanceof Error ? e.message : "Load failed");
+    } finally {
+      setLoading(false);
+    }
+  }, [isAdmin, adminBarberId, scopeQuery]);
+
+  React.useEffect(() => {
+    loadAll();
+  }, [loadAll]);
+
+  const saveProfile = async () => {
+    setStatus("");
+    try {
+      await apiPut(`/api/barber/profile${scopeQuery}`, profile, authHeaders());
+      setStatus("Profile saved.");
+    } catch (e) {
+      setStatus(e instanceof Error ? e.message : "Save failed");
+    }
+  };
+
+  const saveSettings = async () => {
+    setStatus("");
+    try {
+      await apiPut(`/api/barber/settings${scopeQuery}`, settings, authHeaders());
+      setStatus("Settings saved.");
+    } catch (e) {
+      setStatus(e instanceof Error ? e.message : "Save failed");
+    }
+  };
+
+  const saveAvailability = async () => {
+    setStatus("");
+    try {
+      await apiPut(`/api/barber/availability${scopeQuery}`, { availability }, authHeaders());
+      setStatus("Schedule saved.");
+    } catch (e) {
+      setStatus(e instanceof Error ? e.message : "Save failed");
+    }
+  };
+
+  const addService = async () => {
+    setStatus("");
+    const name = svcDraft.name.trim();
+    if (!name) {
+      setStatus("Service name required.");
+      return;
+    }
+    try {
+      await apiPost(
+        `/api/barber/services${scopeQuery}`,
+        {
+          name,
+          price: Number(svcDraft.price),
+          duration_minutes: Number(svcDraft.duration_minutes),
+        },
+        authHeaders(),
+      );
+      setSvcDraft({ name: "", price: "25", duration_minutes: "30" });
+      await loadAll();
+    } catch (e) {
+      setStatus(e instanceof Error ? e.message : "Add failed");
+    }
+  };
+
+  const removeService = async (id) => {
+    setStatus("");
+    try {
+      await apiDelete(`/api/barber/services/${id}${scopeQuery}`, authHeaders());
+      await loadAll();
+    } catch (e) {
+      setStatus(e instanceof Error ? e.message : "Delete failed");
+    }
+  };
+
+  const addClient = async () => {
+    setStatus("");
+    if (!clientDraft.name.trim()) {
+      setStatus("Client name required.");
+      return;
+    }
+    try {
+      await apiPost(`/api/barber/clients${scopeQuery}`, clientDraft, authHeaders());
+      setClientDraft({ name: "", phone: "", notes: "" });
+      await loadAll();
+    } catch (e) {
+      setStatus(e instanceof Error ? e.message : "Add failed");
+    }
+  };
+
+  const uploadMedia = async () => {
+    setStatus("");
+    if (!mediaFile) {
+      setStatus("Choose an image.");
+      return;
+    }
+    const fd = new FormData();
+    fd.append("image", mediaFile);
+    try {
+      const r = await fetchWithTimeout(apiUrl(`/api/barber/media${scopeQuery}`), {
+        method: "POST",
+        headers: authHeaders(),
+        body: fd,
+        timeoutMs: 120000,
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j?.message || j?.error || `HTTP ${r.status}`);
+      setMediaFile(null);
+      await loadAll();
+      setStatus("Image uploaded.");
+    } catch (e) {
+      setStatus(e instanceof Error ? e.message : "Upload failed");
+    }
+  };
+
+  const removeMedia = async (id) => {
+    setStatus("");
+    try {
+      await apiDelete(`/api/barber/media/${id}${scopeQuery}`, authHeaders());
+      await loadAll();
+    } catch (e) {
+      setStatus(e instanceof Error ? e.message : "Delete failed");
+    }
+  };
+
+  const updateDay = (idx, patch) => {
+    setAvailability((prev) => {
+      const next = [...prev];
+      const row = next.find((r) => Number(r.day_of_week) === idx);
+      if (row) Object.assign(row, patch);
+      else next.push({ day_of_week: idx, start_time: "09:00", end_time: "18:00", is_off: false, ...patch });
+      return [...next];
+    });
+  };
+
+  const renderDayRow = (d) => {
+    const row = availability.find((r) => Number(r.day_of_week) === d) || {
+      day_of_week: d,
+      start_time: "09:00",
+      end_time: "18:00",
+      is_off: false,
+    };
+    return (
+      <div
+        key={d}
+        style={{
+          display: "grid",
+          gridTemplateColumns: "72px 1fr 1fr 1fr",
+          gap: 8,
+          alignItems: "center",
+          marginBottom: 8,
+        }}
+      >
+        <div style={{ fontWeight: 800, color: theme.colors.text }}>{DAY_LABELS[d]}</div>
+        <label style={{ display: "flex", alignItems: "center", gap: 8, color: theme.colors.muted, fontSize: 13 }}>
+          <input
+            type="checkbox"
+            checked={Boolean(row.is_off)}
+            onChange={(e) => updateDay(d, { is_off: e.target.checked })}
+          />
+          Off
+        </label>
+        <input
+          style={inputStyle}
+          value={row.start_time || ""}
+          onChange={(e) => updateDay(d, { start_time: e.target.value })}
+          placeholder="09:00"
+        />
+        <input
+          style={inputStyle}
+          value={row.end_time || ""}
+          onChange={(e) => updateDay(d, { end_time: e.target.value })}
+          placeholder="18:00"
+        />
+      </div>
+    );
+  };
+
+  const tabs = [
+    { id: "profile", label: "Profile" },
+    { id: "services", label: "Services" },
+    { id: "schedule", label: "Schedule" },
+    { id: "payments", label: "Payments" },
+    { id: "media", label: "Media" },
+    { id: "aura", label: "AI (AURA)" },
+    { id: "clients", label: "Clients" },
+  ];
+
+  return (
+    <Page>
+      <PageHeader
+        title="Shop dashboard"
+        subtitle="Barber settings — profile, services, weekly hours, PayPal deposits, portfolio images, AURA voice, and client notes."
+        right={
+          isAdmin ? (
+            <label style={{ display: "grid", gap: 6, minWidth: 200 }}>
+              <span style={{ fontSize: 12, color: theme.colors.muted, fontWeight: 800 }}>Barber (admin)</span>
+              <select
+                value={adminBarberId}
+                onChange={(e) => setAdminBarberId(e.target.value)}
+                style={inputStyle}
+              >
+                {barberList.map((b) => (
+                  <option key={b.id} value={String(b.id)}>
+                    #{b.id} — {b.name || "Unnamed"}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null
+        }
+      />
+
+      <Card style={{ marginTop: 16 }}>
+        <CardTitle>Quick links</CardTitle>
+        <p style={{ fontSize: 13, color: theme.colors.muted, marginTop: 8, marginBottom: 12 }}>
+          Customer booking uses live rules from this dashboard (deposits + hours) once you save.
+        </p>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+          <Link to="/booking" style={{ color: theme.colors.text, fontWeight: 800, fontSize: 14 }}>
+            Open booking →
+          </Link>
+          <Link to="/styles" style={{ color: theme.colors.text, fontWeight: 800, fontSize: 14 }}>
+            Browse styles →
+          </Link>
+          <button
+            type="button"
+            onClick={() => loadAll()}
+            style={{
+              background: "transparent",
+              border: `1px solid ${theme.colors.border}`,
+              color: theme.colors.muted,
+              fontWeight: 800,
+              fontSize: 13,
+              padding: "8px 12px",
+              borderRadius: theme.radius.sm,
+              cursor: "pointer",
+            }}
+          >
+            Reload data
+          </button>
+        </div>
+      </Card>
+
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 16 }}>
+        {tabs.map((t) => (
+          <button key={t.id} type="button" style={tabBtn(tab === t.id)} onClick={() => setTab(t.id)}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {status ? (
+        <p style={{ marginTop: 12, color: theme.colors.muted, fontSize: 14 }} role="status">
+          {status}
+        </p>
+      ) : null}
+      {loading ? (
+        <p style={{ marginTop: 8, color: theme.colors.muted }} role="status">
+          Loading…
+        </p>
+      ) : null}
+
+      {tab === "profile" ? (
+        <Card style={{ marginTop: 16 }}>
+          <CardTitle>Profile</CardTitle>
+          <div style={{ display: "grid", gap: 12, marginTop: 12 }}>
+            <label style={{ display: "grid", gap: 6, fontSize: 12, color: theme.colors.muted, fontWeight: 800 }}>
+              Name
+              <input style={inputStyle} value={profile.name} onChange={(e) => setProfile({ ...profile, name: e.target.value })} />
+            </label>
+            <label style={{ display: "grid", gap: 6, fontSize: 12, color: theme.colors.muted, fontWeight: 800 }}>
+              Bio
+              <textarea
+                style={{ ...inputStyle, minHeight: 100 }}
+                value={profile.bio}
+                onChange={(e) => setProfile({ ...profile, bio: e.target.value })}
+              />
+            </label>
+            <label style={{ display: "grid", gap: 6, fontSize: 12, color: theme.colors.muted, fontWeight: 800 }}>
+              Phone
+              <input style={inputStyle} value={profile.phone} onChange={(e) => setProfile({ ...profile, phone: e.target.value })} />
+            </label>
+            <label style={{ display: "grid", gap: 6, fontSize: 12, color: theme.colors.muted, fontWeight: 800 }}>
+              Location
+              <input style={inputStyle} value={profile.location} onChange={(e) => setProfile({ ...profile, location: e.target.value })} />
+            </label>
+            <label style={{ display: "grid", gap: 6, fontSize: 12, color: theme.colors.muted, fontWeight: 800 }}>
+              Profile image URL
+              <input
+                style={inputStyle}
+                value={profile.profile_image}
+                onChange={(e) => setProfile({ ...profile, profile_image: e.target.value })}
+              />
+            </label>
+            <label style={{ display: "grid", gap: 6, fontSize: 12, color: theme.colors.muted, fontWeight: 800 }}>
+              Logo URL
+              <input style={inputStyle} value={profile.logo} onChange={(e) => setProfile({ ...profile, logo: e.target.value })} />
+            </label>
+            <Button variant="indigo" type="button" onClick={saveProfile}>
+              Save profile
+            </Button>
+          </div>
+        </Card>
+      ) : null}
+
+      {tab === "services" ? (
+        <Card style={{ marginTop: 16 }}>
+          <CardTitle>Services</CardTitle>
+          <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
+            {services.map((s) => (
+              <div
+                key={s.id}
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  gap: 12,
+                  padding: 10,
+                  border: `1px solid ${theme.colors.border}`,
+                  borderRadius: theme.radius.sm,
+                  background: theme.colors.subtle,
+                }}
+              >
+                <div>
+                  <div style={{ fontWeight: 900, color: theme.colors.text }}>{s.name}</div>
+                  <div style={{ fontSize: 13, color: theme.colors.muted }}>
+                    ${Number(s.price).toFixed(2)} · {s.duration_minutes} min · {s.is_active ? "active" : "hidden"}
+                  </div>
+                </div>
+                <Button variant="indigo" type="button" onClick={() => removeService(s.id)}>
+                  Delete
+                </Button>
+              </div>
+            ))}
+            {!services.length ? <div style={{ color: theme.colors.muted, fontSize: 13 }}>No services yet.</div> : null}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 100px 120px auto", gap: 8, alignItems: "end" }}>
+              <label style={{ display: "grid", gap: 6, fontSize: 12, color: theme.colors.muted, fontWeight: 800 }}>
+                New name
+                <input style={inputStyle} value={svcDraft.name} onChange={(e) => setSvcDraft({ ...svcDraft, name: e.target.value })} />
+              </label>
+              <label style={{ display: "grid", gap: 6, fontSize: 12, color: theme.colors.muted, fontWeight: 800 }}>
+                Price
+                <input style={inputStyle} value={svcDraft.price} onChange={(e) => setSvcDraft({ ...svcDraft, price: e.target.value })} />
+              </label>
+              <label style={{ display: "grid", gap: 6, fontSize: 12, color: theme.colors.muted, fontWeight: 800 }}>
+                Min
+                <input
+                  style={inputStyle}
+                  value={svcDraft.duration_minutes}
+                  onChange={(e) => setSvcDraft({ ...svcDraft, duration_minutes: e.target.value })}
+                />
+              </label>
+              <Button variant="indigo" type="button" onClick={addService}>
+                Add
+              </Button>
+            </div>
+          </div>
+        </Card>
+      ) : null}
+
+      {tab === "schedule" ? (
+        <Card style={{ marginTop: 16 }}>
+          <CardTitle>Weekly schedule</CardTitle>
+          <p style={{ fontSize: 13, color: theme.colors.muted, marginTop: 8 }}>
+            Times use 24h <code>HH:MM</code>. Bookings outside these windows are blocked once you save.
+          </p>
+          <div style={{ marginTop: 12 }}>{[0, 1, 2, 3, 4, 5, 6].map(renderDayRow)}</div>
+          <div style={{ marginTop: 14 }}>
+            <Button variant="indigo" type="button" onClick={saveAvailability}>
+              Save schedule
+            </Button>
+          </div>
+        </Card>
+      ) : null}
+
+      {tab === "payments" ? (
+        <Card style={{ marginTop: 16 }}>
+          <CardTitle>Payments</CardTitle>
+          <div style={{ marginTop: 12, display: "grid", gap: 12 }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 10, color: theme.colors.text, fontWeight: 800 }}>
+              <input
+                type="checkbox"
+                checked={settings.booking_deposit_enabled}
+                onChange={(e) => setSettings({ ...settings, booking_deposit_enabled: e.target.checked })}
+              />
+              Enable booking deposits (PayPal)
+            </label>
+            <label style={{ display: "grid", gap: 6, fontSize: 12, color: theme.colors.muted, fontWeight: 800 }}>
+              Deposit amount (USD)
+              <input
+                type="number"
+                min="0"
+                step="1"
+                style={inputStyle}
+                value={settings.deposit_amount}
+                onChange={(e) => setSettings({ ...settings, deposit_amount: Number(e.target.value) })}
+              />
+            </label>
+            <Button variant="indigo" type="button" onClick={saveSettings}>
+              Save payment settings
+            </Button>
+          </div>
+        </Card>
+      ) : null}
+
+      {tab === "media" ? (
+        <Card style={{ marginTop: 16 }}>
+          <CardTitle>Portfolio</CardTitle>
+          <div style={{ marginTop: 12, display: "grid", gap: 12 }}>
+            {media.map((im) => (
+              <div
+                key={im.id}
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  gap: 12,
+                  padding: 10,
+                  border: `1px solid ${theme.colors.border}`,
+                  borderRadius: theme.radius.sm,
+                }}
+              >
+                <div style={{ fontSize: 13, color: theme.colors.text, wordBreak: "break-all" }}>{im.image_url}</div>
+                <Button variant="indigo" type="button" onClick={() => removeMedia(im.id)}>
+                  Remove
+                </Button>
+              </div>
+            ))}
+            {!media.length ? <div style={{ color: theme.colors.muted, fontSize: 13 }}>No portfolio images yet.</div> : null}
+            <input type="file" accept="image/*" onChange={(e) => setMediaFile(e.target.files?.[0] || null)} />
+            <Button variant="indigo" type="button" onClick={uploadMedia}>
+              Upload image
+            </Button>
+          </div>
+        </Card>
+      ) : null}
+
+      {tab === "aura" ? (
+        <Card style={{ marginTop: 16 }}>
+          <CardTitle>AI (AURA)</CardTitle>
+          <div style={{ marginTop: 12, display: "grid", gap: 12 }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 10, color: theme.colors.text, fontWeight: 800 }}>
+              <input
+                type="checkbox"
+                checked={settings.aura_enabled}
+                onChange={(e) => setSettings({ ...settings, aura_enabled: e.target.checked })}
+              />
+              AURA enabled for this shop
+            </label>
+            <label style={{ display: "grid", gap: 6, fontSize: 12, color: theme.colors.muted, fontWeight: 800 }}>
+              Voice (Amazon Polly id)
+              <input
+                style={inputStyle}
+                value={settings.aura_voice_type}
+                onChange={(e) => setSettings({ ...settings, aura_voice_type: e.target.value })}
+              />
+            </label>
+            <label style={{ display: "grid", gap: 6, fontSize: 12, color: theme.colors.muted, fontWeight: 800 }}>
+              Theme accent (hex)
+              <input
+                style={inputStyle}
+                value={settings.theme_color}
+                onChange={(e) => setSettings({ ...settings, theme_color: e.target.value })}
+              />
+            </label>
+            <label style={{ display: "grid", gap: 6, fontSize: 12, color: theme.colors.muted, fontWeight: 800 }}>
+              Language
+              <input style={inputStyle} value={settings.language} onChange={(e) => setSettings({ ...settings, language: e.target.value })} />
+            </label>
+            <Button variant="indigo" type="button" onClick={saveSettings}>
+              Save AURA settings
+            </Button>
+          </div>
+        </Card>
+      ) : null}
+
+      {tab === "clients" ? (
+        <Card style={{ marginTop: 16 }}>
+          <CardTitle>Clients</CardTitle>
+          <p style={{ fontSize: 13, color: theme.colors.muted, marginTop: 8 }}>Simple CRM list for your chair.</p>
+          <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
+            {clients.map((c) => (
+              <div
+                key={c.id}
+                style={{
+                  fontSize: 13,
+                  color: theme.colors.text,
+                  padding: 8,
+                  border: `1px solid ${theme.colors.border}`,
+                  borderRadius: 8,
+                }}
+              >
+                <strong>{c.name}</strong> {c.phone ? `· ${c.phone}` : ""}
+                {c.notes ? <div style={{ color: theme.colors.muted, marginTop: 4 }}>{c.notes}</div> : null}
+              </div>
+            ))}
+          </div>
+          <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr 1fr 1fr auto", gap: 8, alignItems: "end" }}>
+            <input
+              style={inputStyle}
+              placeholder="Name"
+              value={clientDraft.name}
+              onChange={(e) => setClientDraft({ ...clientDraft, name: e.target.value })}
+            />
+            <input
+              style={inputStyle}
+              placeholder="Phone"
+              value={clientDraft.phone}
+              onChange={(e) => setClientDraft({ ...clientDraft, phone: e.target.value })}
+            />
+            <input
+              style={inputStyle}
+              placeholder="Notes"
+              value={clientDraft.notes}
+              onChange={(e) => setClientDraft({ ...clientDraft, notes: e.target.value })}
+            />
+            <Button variant="indigo" type="button" onClick={addClient}>
+              Add
+            </Button>
+          </div>
+        </Card>
+      ) : null}
+    </Page>
+  );
+}
