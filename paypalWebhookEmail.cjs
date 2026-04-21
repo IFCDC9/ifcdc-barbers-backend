@@ -30,6 +30,24 @@ async function handlePaypalWebhookEvent(body) {
     return { handled: false, reason: "not_capture_completed" };
   }
 
+  try {
+    const mod = await import("./paymentCaptureWebhooks.js");
+    const r = await mod.handlePaymentsDepositProWebhook(body);
+    if (
+      r.handled &&
+      (r.kind === "deposit_paid" ||
+        r.kind === "deposit_duplicate" ||
+        r.kind === "deposit_amount_mismatch" ||
+        r.kind === "pro_paid" ||
+        r.kind === "pro_duplicate" ||
+        r.kind === "pro_amount_mismatch")
+    ) {
+      return { handled: true, kind: r.kind };
+    }
+  } catch (e) {
+    console.error("[paypal] deposit/pro webhook branch failed:", e?.stack || e);
+  }
+
   const resource = body.resource || {};
   const amount = resource.amount?.value ?? "";
   const currency = resource.amount?.currency_code ?? "USD";

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { getBarbers, mediaUrl } from "../services/api.js";
 import { formatNanpUsDisplay, nanpDialString } from "../lib/formatNanp.js";
+import { useAuraContactPhone } from "../lib/useAuraContactPhone.js";
 
 function getDistanceKm(lat1, lon1, lat2, lon2) {
   const R = 6371;
@@ -106,7 +107,7 @@ export default function Home() {
   const [locError, setLocError] = useState(null);
   const navigate = useNavigate();
 
-  const auraPhoneRaw = String(import.meta.env.VITE_AURA_PHONE_NUMBER || "").trim();
+  const auraPhoneRaw = useAuraContactPhone();
   const auraPhoneTel = nanpDialString(auraPhoneRaw);
   const auraPhoneDisplay = formatNanpUsDisplay(auraPhoneRaw);
 

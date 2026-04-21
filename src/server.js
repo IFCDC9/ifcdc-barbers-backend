@@ -2,6 +2,8 @@
    IFCDC BARBERS PLATFORM SERVER
 ========================================== */
 
+import "../loadBackendEnv.mjs";
+
 const bootImport = async (label, importer) => {
   console.log(`[boot] importing ${label}...`)
   const mod = await importer()
@@ -9,11 +11,9 @@ const bootImport = async (label, importer) => {
   return mod
 }
 
-const dotenv = (await bootImport("dotenv", () => import("dotenv"))).default
 const nodePath = await import("node:path")
 const nodeUrl = await import("node:url")
 const __rootDir = nodePath.join(nodePath.dirname(nodeUrl.fileURLToPath(import.meta.url)), "..")
-dotenv.config({ path: nodePath.join(__rootDir, ".env") })
 console.log("RESEND KEY STATUS:", process.env.RESEND_API_KEY ? "LOADED" : "MISSING")
 
 /** Render sets RENDER_EXTERNAL_URL (https://your-service.onrender.com). Use it for Twilio TwiML redirects if PUBLIC_BASE_URL is unset. */
@@ -85,7 +85,6 @@ let dashboardRoutes,
   supabaseBridgeRoutes,
   notificationRoutes,
   paymentsRoutes,
-  testSmsRoutes,
   barberProfileApiRoutes,
   aboutRoutes,
   contactRoutes,
@@ -166,7 +165,6 @@ try {
 supabaseBridgeRoutes = await importDefault("routes/supabaseBridgeRoutes", "./routes/supabaseBridgeRoutes.js")
 notificationRoutes = await importDefault("routes/notificationRoutes", "./routes/notificationRoutes.js")
 paymentsRoutes = await importDefault("routes/paymentsRoutes", "./routes/paymentsRoutes.js")
-testSmsRoutes = await importDefault("routes/testSmsRoutes", "./routes/testSmsRoutes.js")
 barberProfileApiRoutes = await importDefault("routes/barberProfileApiRoutes", "./routes/barberProfileApiRoutes.js")
 const uploadRoutes = await importDefault("routes/uploadRoutes", "./routes/uploadRoutes.js")
 const verifyPaymentRoutes = await importDefault("routes/verifyPaymentRoutes", "./routes/verifyPaymentRoutes.js")
@@ -385,7 +383,7 @@ app.get("/api/health", async (_req, res) => {
     twilio: Boolean(
       process.env.TWILIO_ACCOUNT_SID?.trim()
       && process.env.TWILIO_AUTH_TOKEN?.trim()
-      && process.env.TWILIO_PHONE_NUMBER?.trim()
+      && process.env.TWILIO_MESSAGING_SERVICE_SID?.trim()
     ),
     twilioSignatureValidation: process.env.TWILIO_VALIDATE_SIGNATURE === "true",
     twilioWebhooks: {
@@ -414,7 +412,7 @@ app.get("/api/health/readiness", async (_req, res) => {
   const twilioConfigured = Boolean(
     process.env.TWILIO_ACCOUNT_SID?.trim()
     && process.env.TWILIO_AUTH_TOKEN?.trim()
-    && process.env.TWILIO_PHONE_NUMBER?.trim()
+    && process.env.TWILIO_MESSAGING_SERVICE_SID?.trim()
   )
 
   const publicBase =
@@ -732,7 +730,6 @@ apiRouter.use("/appointments", appointmentRoutes)
 apiRouter.use("/paypal", paypalRoutes)
 apiRouter.use("/notifications", notificationRoutes)
 apiRouter.use("/payments", paymentsRoutes)
-apiRouter.use(testSmsRoutes)
 apiRouter.use("/earnings", earningsRoutes)
 apiRouter.use("/tips", tipsRoutes)
 apiRouter.use("/wait-time", waitTimeRoutes)

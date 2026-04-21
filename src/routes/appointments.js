@@ -53,6 +53,16 @@ const ensureAppointmentsSchema = async () => {
         ADD COLUMN IF NOT EXISTS payment_verified_at TIMESTAMP,
         ADD COLUMN IF NOT EXISTS payment_payload JSONB
     `)
+    await db.query(`
+      ALTER TABLE appointments
+        ADD COLUMN IF NOT EXISTS service_price NUMERIC(10,2),
+        ADD COLUMN IF NOT EXISTS platform_fee NUMERIC(10,2) DEFAULT 0.99,
+        ADD COLUMN IF NOT EXISTS barber_payout NUMERIC(10,2),
+        ADD COLUMN IF NOT EXISTS payout_status VARCHAR(50) DEFAULT 'unpaid'
+    `)
+    await db.query(`
+      ALTER TABLE appointments ALTER COLUMN payment_status SET DEFAULT 'pending'
+    `)
   } catch (e) {
     // If the DB user lacks ALTER permissions, we still allow the API to run.
     console.warn("[appointments] schema ensure failed:", e instanceof Error ? e.message : String(e))

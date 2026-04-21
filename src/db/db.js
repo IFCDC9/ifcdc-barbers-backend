@@ -1,9 +1,6 @@
 import dns from "node:dns"
 import { promisify } from "node:util"
 import pkg from "pg"
-import dotenv from "dotenv"
-
-dotenv.config()
 
 /** Prefer IPv4 ordering globally. */
 if (typeof dns.setDefaultResultOrder === "function") {

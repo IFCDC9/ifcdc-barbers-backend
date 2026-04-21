@@ -1,5 +1,13 @@
 import { dbQuery } from "./db.js";
 import { depositsAllowedForBooking } from "./styleBookingPricing.js";
+import {
+  barberAuraEffective,
+  barberDepositsEffective,
+  normalizeBillingProvider,
+  normalizeTier,
+  platformFeeUsdForTier,
+  TIER_FREE,
+} from "./subscriptionTier.js";
 
 function parseTimeToMinutes(t) {
   const s = String(t || "").trim();
@@ -123,12 +131,29 @@ export async function resolveScopedBarberId(user, queryBarberId) {
 
 /**
  * @param {number} barberId
- * @returns {Promise<{ booking_deposit_enabled: boolean, deposit_amount: number, payment_method: string, aura_enabled: boolean, aura_voice_type: string, language: string, theme_color: string }>}
+ * @returns {Promise<{
+ *   booking_deposit_enabled: boolean,
+ *   deposit_amount: number,
+ *   payment_method: string,
+ *   aura_enabled: boolean,
+ *   aura_available: boolean,
+ *   booking_deposit_available: boolean,
+ *   aura_voice_type: string,
+ *   language: string,
+ *   theme_color: string,
+ *   subscription_tier: "free"|"pro"|"elite",
+ *   subscription_monthly_price: number | null,
+ *   billing_provider: string,
+ *   billing_subscription_id: string | null,
+ * }>}
  */
 export async function loadBarberSettingsRow(barberId) {
   const r = await dbQuery(
     `SELECT theme_color, booking_deposit_enabled, deposit_amount::float8 AS deposit_amount,
-            payment_method, aura_enabled, aura_voice_type, language
+            payment_method, aura_enabled, aura_voice_type, language,
+            subscription_tier, subscription_monthly_price::float8 AS subscription_monthly_price,
+            billing_provider, billing_subscription_id,
+            is_pro, pro_purchase_status, pro_transaction_id, pro_purchased_at
      FROM barber_settings
      WHERE barber_id = $1
      LIMIT 1`,
@@ -136,7 +161,7 @@ export async function loadBarberSettingsRow(barberId) {
   );
   const row = r.rows?.[0];
   if (!row) {
-    return {
+    const base = {
       theme_color: "#FFD700",
       booking_deposit_enabled: false,
       deposit_amount: 0,
@@ -144,9 +169,26 @@ export async function loadBarberSettingsRow(barberId) {
       aura_enabled: true,
       aura_voice_type: "Polly.Joanna",
       language: "en",
+      subscription_tier: TIER_FREE,
+      subscription_monthly_price: null,
+      billing_provider: "none",
+      billing_subscription_id: null,
+      is_pro: false,
+      pro_purchase_status: "not_purchased",
+      pro_transaction_id: null,
+      pro_purchased_at: null,
+    };
+    return {
+      ...base,
+      aura_available: barberAuraEffective(base),
+      booking_deposit_available: barberDepositsEffective(base),
     };
   }
-  return {
+  const subscription_monthly_price =
+    row.subscription_monthly_price != null && Number.isFinite(Number(row.subscription_monthly_price))
+      ? Number(row.subscription_monthly_price)
+      : null;
+  const base = {
     theme_color: String(row.theme_color || "#FFD700"),
     booking_deposit_enabled: Boolean(row.booking_deposit_enabled),
     deposit_amount: Number(row.deposit_amount) || 0,
@@ -154,6 +196,19 @@ export async function loadBarberSettingsRow(barberId) {
     aura_enabled: Boolean(row.aura_enabled),
     aura_voice_type: String(row.aura_voice_type || "Polly.Joanna"),
     language: String(row.language || "en"),
+    subscription_tier: normalizeTier(row.subscription_tier),
+    subscription_monthly_price,
+    billing_provider: normalizeBillingProvider(row.billing_provider),
+    billing_subscription_id: row.billing_subscription_id != null ? String(row.billing_subscription_id) : null,
+    is_pro: Boolean(row.is_pro),
+    pro_purchase_status: String(row.pro_purchase_status || "not_purchased"),
+    pro_transaction_id: row.pro_transaction_id != null ? String(row.pro_transaction_id) : null,
+    pro_purchased_at: row.pro_purchased_at || null,
+  };
+  return {
+    ...base,
+    aura_available: barberAuraEffective(base),
+    booking_deposit_available: barberDepositsEffective(base),
   };
 }
 
@@ -163,10 +218,46 @@ export async function loadBarberSettingsRow(barberId) {
  */
 export async function loadBarberDepositPricingOpts(barberId) {
   const s = await loadBarberSettingsRow(barberId);
+  const subscriptionTier = s.subscription_tier;
+  const platformFeeUsd = platformFeeUsdForTier(subscriptionTier);
+  const common = { subscriptionTier, platformFeeUsd };
+  if (!barberDepositsEffective(s)) {
+    return { ...common, barberDepositEnabled: false, barberDepositAmount: undefined };
+  }
   return {
+    ...common,
     barberDepositEnabled: s.booking_deposit_enabled,
     barberDepositAmount: s.deposit_amount > 0 ? s.deposit_amount : undefined,
   };
+}
+
+/**
+ * Links a booking to `barber_clients` (creates a lightweight CRM row when missing).
+ * @returns {Promise<number | null>}
+ */
+export async function resolveOrCreateBarberClientId(barberId, customerName, customerEmail) {
+  const bid = Number(barberId);
+  const em = String(customerEmail || "").trim();
+  const nm = String(customerName || "").trim();
+  if (!Number.isFinite(bid) || !em) return null;
+
+  const found = await dbQuery(
+    `SELECT id FROM barber_clients
+     WHERE barber_id = $1 AND lower(trim(COALESCE(email, ''))) = lower(trim($2))
+     LIMIT 1`,
+    [bid, em],
+  );
+  const existingId = found.rows?.[0]?.id;
+  if (existingId != null) return Number(existingId);
+
+  const ins = await dbQuery(
+    `INSERT INTO barber_clients (barber_id, name, email, phone, notes)
+     VALUES ($1, $2, $3, NULL, $4)
+     RETURNING id`,
+    [bid, nm || "Client", em, "from booking"],
+  );
+  const id = ins.rows?.[0]?.id;
+  return id != null ? Number(id) : null;
 }
 
 /**
@@ -180,6 +271,8 @@ export async function buildPublicBarberPricingResponse(barberId) {
   const settings = await loadBarberSettingsRow(bid);
   const depositOpts = await loadBarberDepositPricingOpts(bid);
   const deposits_allowed = depositsAllowedForBooking(depositOpts);
+  const platform_fee_usd = Number(depositOpts.platformFeeUsd) || 0;
+  const barber_platform_fee_per_booking_usd = 0.99;
 
   const svc = await dbQuery(
     `SELECT id, name, price::float8 AS price, duration_minutes, is_active
@@ -192,7 +285,16 @@ export async function buildPublicBarberPricingResponse(barberId) {
 
   return {
     barberId: bid,
+    subscription_tier: settings.subscription_tier,
+    platform_fee_usd,
+    barber_platform_fee_per_booking_usd,
+    free_tier_upgrade_message:
+      settings.subscription_tier === TIER_FREE
+        ? "Optional Pro upgrade ($9.99) unlocks more dashboard and AURA tools."
+        : null,
+    aura_available: settings.aura_available,
     booking_deposit_enabled: settings.booking_deposit_enabled,
+    booking_deposit_available: settings.booking_deposit_available,
     deposit_amount: Number(settings.deposit_amount) || 0,
     deposits_allowed,
     payment_method: settings.payment_method,

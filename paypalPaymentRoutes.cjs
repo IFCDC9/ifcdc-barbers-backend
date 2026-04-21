@@ -175,15 +175,11 @@ async function probePayPalOAuthAndLog() {
 
 const router = express.Router();
 
-/** POST /api/payments/create-order — style-based: { styleId, barberId, paymentType?, tipPercent?, tipAmount?, amount, currency?, description? } */
+/** POST /api/payments/create-order — style-based: { styleId, barberId, paymentType?, tipPercent?, tipAmount? } — total computed server-side only */
 router.post("/create-order", async (req, res) => {
   try {
     const raw = req.body || {};
-    const { dbQuery } = await import("./db.js");
-    const { roundMoney2, computeChargeBreakdown, depositsAllowedForBooking } = await import(
-      "./styleBookingPricing.js"
-    );
-    const { loadBarberDepositPricingOpts } = await import("./barberScope.js");
+    const { computeStyleBookingBreakdown } = await import("./bookingBreakdown.js");
 
     const styleId = String(raw.styleId || "").trim();
     const barberId = Number(raw.barberId);
@@ -195,51 +191,33 @@ router.post("/create-order", async (req, res) => {
       });
     }
 
-    const sr = await dbQuery(
-      `SELECT id, barber_id, title, price::float8 AS price FROM styles WHERE id = $1::uuid LIMIT 1`,
-      [styleId]
-    );
-    const style = sr.rows?.[0];
-    if (!style) {
-      return res.status(404).json({ success: false, error: "style_not_found", message: "Style not found" });
-    }
-    if (Number(style.barber_id) !== barberId) {
-      return res.status(400).json({
-        success: false,
-        error: "barber_mismatch",
-        message: "This style does not belong to the selected barber",
-      });
-    }
-
-    const stylePrice = roundMoney2(Number(style.price));
-    if (!Number.isFinite(stylePrice) || stylePrice <= 0) {
-      return res.status(400).json({
-        success: false,
-        error: "invalid_style_price",
-        message: "Style has no valid price",
-      });
-    }
-
-    const depositOpts = await loadBarberDepositPricingOpts(barberId);
     let paymentType = String(raw.paymentType || raw.payMode || "full").toLowerCase() === "deposit" ? "deposit" : "full";
-    if (paymentType === "deposit" && !depositsAllowedForBooking(depositOpts)) paymentType = "full";
-
-    const breakdown = computeChargeBreakdown(stylePrice, paymentType, raw, depositOpts);
-    const amount = Number(raw.amount);
-    if (!Number.isFinite(amount) || Math.abs(amount - breakdown.paypalTotal) > 0.009) {
-      return res.status(400).json({
+    const computed = await computeStyleBookingBreakdown({ styleId, barberId, paymentType, body: raw });
+    if (!computed.ok) {
+      return res.status(computed.status || 400).json({
         success: false,
-        error: "amount_mismatch",
-        message: `amount must equal service plus tip (${breakdown.paypalTotal.toFixed(2)} USD)`,
-        breakdown,
+        error: computed.error || "quote_failed",
+        message: computed.message || "Could not compute booking total",
       });
     }
 
+    const { breakdown } = computed;
+    const amount = breakdown.paypalTotal;
     if (!Number.isFinite(amount) || amount <= 0) {
       return res.status(400).json({
         success: false,
         error: "invalid_amount",
-        message: "amount must be a positive number",
+        message: "Computed charge is invalid",
+      });
+    }
+
+    const clientAmount = Number(raw.amount);
+    if (Number.isFinite(clientAmount) && Math.abs(clientAmount - amount) > 0.009) {
+      return res.status(400).json({
+        success: false,
+        error: "amount_rejected",
+        message: "Do not send client-calculated totals; the server sets the PayPal amount.",
+        breakdown,
       });
     }
 
@@ -375,6 +353,169 @@ router.post("/capture-order", async (req, res) => {
       message: f.message,
     });
   }
+});
+
+/** POST /api/payments/deposit-webhook — PayPal event (same shape as Dashboard webhooks). */
+router.post("/deposit-webhook", (req, res) => {
+  res.status(200).json({ ok: true, received: true });
+  (async () => {
+    try {
+      const mod = await import("./paymentCaptureWebhooks.js");
+      await mod.handlePaymentsDepositProWebhook(req.body || {});
+    } catch (e) {
+      console.error("[payments] deposit-webhook async:", e?.stack || e);
+    }
+  })();
+});
+
+/** POST /api/payments/pro-webhook — same processor (custom_id distinguishes Pro vs deposit). */
+router.post("/pro-webhook", (req, res) => {
+  res.status(200).json({ ok: true, received: true });
+  (async () => {
+    try {
+      const mod = await import("./paymentCaptureWebhooks.js");
+      await mod.handlePaymentsDepositProWebhook(req.body || {});
+    } catch (e) {
+      console.error("[payments] pro-webhook async:", e?.stack || e);
+    }
+  })();
+});
+
+async function handleCreateDepositLink(req, res) {
+  try {
+    const { dbQuery } = await import("./db.js");
+    const raw = req.body || {};
+    const bookingId = String(raw.bookingId || raw.booking_id || "").trim();
+    if (!bookingId) {
+      return res.status(400).json({ ok: false, error: "booking_id_required", message: "bookingId is required" });
+    }
+    const r = await dbQuery(
+      `SELECT id, barber_id, deposit_required, deposit_amount::float8 AS deposit_amount, deposit_status
+       FROM bookings WHERE id = $1::uuid LIMIT 1`,
+      [bookingId],
+    );
+    const row = r.rows?.[0];
+    if (!row) {
+      return res.status(404).json({ ok: false, error: "not_found", message: "Booking not found" });
+    }
+    const role = String(req.user?.role || "").trim();
+    if (role !== "super_admin" && role !== "admin") {
+      const uid = String(req.user?.id || "").trim();
+      if (!uid) {
+        return res.status(403).json({ ok: false, error: "forbidden", message: "Access denied" });
+      }
+      const u = await dbQuery(`SELECT barber_id FROM app_users WHERE id = $1::uuid LIMIT 1`, [uid]);
+      const myBid = Number(u.rows?.[0]?.barber_id);
+      if (!Number.isFinite(myBid) || myBid !== Number(row.barber_id)) {
+        return res.status(403).json({ ok: false, error: "forbidden", message: "Not your booking" });
+      }
+    }
+    if (!row.deposit_required || !(Number(row.deposit_amount) > 0)) {
+      return res.status(400).json({
+        ok: false,
+        error: "deposit_not_required",
+        message: "Deposit link is only created when deposit_required and deposit_amount > 0",
+      });
+    }
+    const { createDepositPaymentLink } = await import("./depositPaymentLink.js");
+    const out = await createDepositPaymentLink({
+      id: String(row.id),
+      deposit_required: true,
+      deposit_amount: Number(row.deposit_amount),
+    });
+    if (!out.ok) {
+      return res.status(502).json({ ok: false, error: out.reason || "link_failed", message: out.message || "" });
+    }
+    return res.json({ ok: true, paymentLink: out.paymentLink, orderId: out.orderId });
+  } catch (e) {
+    console.error("[payments] create-deposit-link:", e?.stack || e);
+    return res.status(500).json({ ok: false, error: "server_error", message: e?.message || String(e) });
+  }
+}
+
+async function handleCreateProLink(req, res) {
+  try {
+    const { dbQuery } = await import("./db.js");
+    const raw = req.body || {};
+    let barberId = Number(raw.barberId ?? raw.barber_id);
+    const role = String(req.user?.role || "").trim();
+    if (role === "barber") {
+      const uid = String(req.user?.id || "").trim();
+      const u = await dbQuery(`SELECT barber_id FROM app_users WHERE id = $1::uuid LIMIT 1`, [uid]);
+      barberId = Number(u.rows?.[0]?.barber_id);
+    }
+    if (!Number.isFinite(barberId)) {
+      return res.status(400).json({ ok: false, error: "barber_id_required", message: "barberId required" });
+    }
+    const exists = await dbQuery(`SELECT id FROM barbers WHERE id = $1 LIMIT 1`, [barberId]);
+    if (!exists.rows?.length) {
+      return res.status(404).json({ ok: false, error: "not_found", message: "Barber not found" });
+    }
+    if (role === "barber") {
+      const uid = String(req.user?.id || "").trim();
+      const u = await dbQuery(`SELECT barber_id FROM app_users WHERE id = $1::uuid LIMIT 1`, [uid]);
+      if (Number(u.rows?.[0]?.barber_id) !== barberId) {
+        return res.status(403).json({ ok: false, error: "forbidden", message: "Access denied" });
+      }
+    } else if (role !== "super_admin" && role !== "admin") {
+      return res.status(403).json({ ok: false, error: "forbidden", message: "Access denied" });
+    }
+    const { createPayPalProUpgradeOrder } = require("./depositPayPalOrder.cjs");
+    const paypal = await createPayPalProUpgradeOrder({ barberId, description: "IFCDC Pro upgrade" });
+    if (!paypal.ok) {
+      return res.status(502).json({ ok: false, error: paypal.error || "paypal_failed", message: paypal.message });
+    }
+    await dbQuery(
+      `UPDATE barber_settings SET pro_purchase_status = 'pending_checkout' WHERE barber_id = $1 AND pro_purchase_status = 'not_purchased'`,
+      [barberId],
+    );
+    return res.json({ ok: true, paymentLink: paypal.approvalUrl, orderId: paypal.orderId });
+  } catch (e) {
+    console.error("[payments] create-pro-link:", e?.stack || e);
+    return res.status(500).json({ ok: false, error: "server_error", message: e?.message || String(e) });
+  }
+}
+
+/** POST /api/payments/create-deposit-link — Bearer or x-admin-key (via requireAuthOrAdminSecret). */
+router.post("/create-deposit-link", (req, res) => {
+  import("./authRoutes.js")
+    .then(({ requireAuthOrAdminSecret }) => {
+      requireAuthOrAdminSecret(req, res, () => {
+        handleCreateDepositLink(req, res).catch((e) => {
+          console.error(e);
+          if (!res.headersSent) {
+            res.status(500).json({ ok: false, error: "server_error", message: e?.message || String(e) });
+          }
+        });
+      });
+    })
+    .catch((e) => {
+      console.error(e);
+      if (!res.headersSent) {
+        res.status(500).json({ ok: false, error: "server_error", message: e?.message || String(e) });
+      }
+    });
+});
+
+/** POST /api/payments/create-pro-link — $9.99 hosted checkout (barber or admin). */
+router.post("/create-pro-link", (req, res) => {
+  import("./authRoutes.js")
+    .then(({ requireAuthOrAdminSecret }) => {
+      requireAuthOrAdminSecret(req, res, () => {
+        handleCreateProLink(req, res).catch((e) => {
+          console.error(e);
+          if (!res.headersSent) {
+            res.status(500).json({ ok: false, error: "server_error", message: e?.message || String(e) });
+          }
+        });
+      });
+    })
+    .catch((e) => {
+      console.error(e);
+      if (!res.headersSent) {
+        res.status(500).json({ ok: false, error: "server_error", message: e?.message || String(e) });
+      }
+    });
 });
 
 module.exports = router;

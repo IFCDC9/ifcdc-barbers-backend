@@ -5,6 +5,7 @@ import { Card, CardTitle } from "../components/ui/Card.jsx";
 import { Button } from "../components/ui/Button.jsx";
 import { theme } from "../components/ui/theme.js";
 import { apiGet, apiPut, apiPost, apiDelete, apiUrl, fetchWithTimeout } from "../lib/api.js";
+import { mediaUrl } from "../services/api.js";
 
 function authHeaders() {
   try {
@@ -89,11 +90,17 @@ export default function BarberSettings() {
     aura_enabled: true,
     aura_voice_type: "Polly.Joanna",
     language: "en",
+    subscription_tier: "pro",
+    subscription_monthly_price: "",
+    billing_provider: "none",
+    billing_subscription_id: "",
   });
   const [clients, setClients] = React.useState([]);
   const [clientDraft, setClientDraft] = React.useState({ name: "", phone: "", notes: "" });
   const [media, setMedia] = React.useState([]);
   const [mediaFile, setMediaFile] = React.useState(null);
+  const [profileImageBusy, setProfileImageBusy] = React.useState(false);
+  const [logoBusy, setLogoBusy] = React.useState(false);
 
   const scopeQuery = React.useMemo(() => {
     if (!isAdmin) return "";
@@ -158,6 +165,8 @@ export default function BarberSettings() {
       const av = Array.isArray(a?.availability) ? a.availability : [];
       setAvailability(av.length ? av : defaultWeekAvailability());
       const se = st?.settings || {};
+      const tier = String(se.subscription_tier || "pro").toLowerCase();
+      const smp = se.subscription_monthly_price;
       setSettings({
         theme_color: se.theme_color || "#FFD700",
         booking_deposit_enabled: Boolean(se.booking_deposit_enabled),
@@ -166,6 +175,11 @@ export default function BarberSettings() {
         aura_enabled: se.aura_enabled !== false,
         aura_voice_type: se.aura_voice_type || "Polly.Joanna",
         language: se.language || "en",
+        subscription_tier: tier === "elite" ? "elite" : tier === "free" ? "free" : "pro",
+        subscription_monthly_price:
+          smp != null && smp !== "" && Number.isFinite(Number(smp)) ? String(smp) : "",
+        billing_provider: String(se.billing_provider || "none").toLowerCase(),
+        billing_subscription_id: se.billing_subscription_id != null ? String(se.billing_subscription_id) : "",
       });
       setClients(Array.isArray(c?.clients) ? c.clients : []);
       setMedia(Array.isArray(m?.media) ? m.media : []);
@@ -221,6 +235,32 @@ export default function BarberSettings() {
     } catch (e) {
       setStatus(e instanceof Error ? e.message : "Save failed");
     }
+  };
+
+  const BRANDING_MAX_BYTES = 5 * 1024 * 1024;
+  const BRANDING_ACCEPT = "image/jpeg,image/png,image/gif,image/webp,image/avif";
+
+  const uploadBrandingFile = async (file) => {
+    if (!file) return null;
+    if (!/^image\/(jpeg|pjpeg|png|gif|webp|avif)$/i.test(file.type)) {
+      throw new Error("Please choose a JPEG, PNG, GIF, WebP, or AVIF image.");
+    }
+    if (file.size > BRANDING_MAX_BYTES) {
+      throw new Error("Image must be 5MB or smaller.");
+    }
+    const fd = new FormData();
+    fd.append("file", file);
+    const r = await fetchWithTimeout(apiUrl(`/api/upload${scopeQuery}`), {
+      method: "POST",
+      headers: authHeaders(),
+      body: fd,
+      timeoutMs: 120000,
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j?.message || j?.error || `Upload failed (HTTP ${r.status})`);
+    const url = j?.url != null ? String(j.url).trim() : "";
+    if (!url) throw new Error("Server did not return an image URL.");
+    return url;
   };
 
   const saveSettings = async () => {
@@ -460,18 +500,131 @@ export default function BarberSettings() {
               Location
               <input style={inputStyle} value={profile.location} onChange={(e) => setProfile({ ...profile, location: e.target.value })} />
             </label>
-            <label style={{ display: "grid", gap: 6, fontSize: 12, color: theme.colors.muted, fontWeight: 800 }}>
-              Profile image URL
-              <input
-                style={inputStyle}
-                value={profile.profile_image}
-                onChange={(e) => setProfile({ ...profile, profile_image: e.target.value })}
-              />
-            </label>
-            <label style={{ display: "grid", gap: 6, fontSize: 12, color: theme.colors.muted, fontWeight: 800 }}>
-              Logo URL
-              <input style={inputStyle} value={profile.logo} onChange={(e) => setProfile({ ...profile, logo: e.target.value })} />
-            </label>
+            <div style={{ display: "grid", gap: 8 }}>
+              <span style={{ fontSize: 12, color: theme.colors.muted, fontWeight: 800 }}>Upload profile image</span>
+              {profile.profile_image ? (
+                <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                  <img
+                    src={mediaUrl(profile.profile_image)}
+                    alt="Current profile"
+                    style={{
+                      width: 96,
+                      height: 96,
+                      objectFit: "cover",
+                      borderRadius: theme.radius.sm,
+                      border: `1px solid ${theme.colors.border}`,
+                    }}
+                  />
+                  <span style={{ fontSize: 12, color: theme.colors.muted }}>Current image</span>
+                </div>
+              ) : null}
+              <label
+                style={{
+                  display: "inline-flex",
+                  flexDirection: "column",
+                  gap: 6,
+                  fontSize: 12,
+                  color: theme.colors.muted,
+                  fontWeight: 800,
+                  cursor: profileImageBusy ? "wait" : "pointer",
+                }}
+              >
+                <span>Choose file</span>
+                <input
+                  type="file"
+                  accept={BRANDING_ACCEPT}
+                  disabled={profileImageBusy}
+                  style={{ maxWidth: "100%", fontSize: 13, color: theme.colors.text }}
+                  onChange={async (e) => {
+                    const f = e.target.files?.[0];
+                    e.target.value = "";
+                    if (!f) return;
+                    setStatus("");
+                    setProfileImageBusy(true);
+                    try {
+                      const url = await uploadBrandingFile(f);
+                      const merged = { ...profile, profile_image: url };
+                      setProfile(merged);
+                      await apiPut(`/api/barber/profile${scopeQuery}`, merged, authHeaders());
+                      setStatus("Profile image saved.");
+                    } catch (err) {
+                      setStatus(err instanceof Error ? err.message : "Upload failed");
+                    } finally {
+                      setProfileImageBusy(false);
+                    }
+                  }}
+                />
+              </label>
+              {profileImageBusy ? (
+                <span style={{ fontSize: 12, color: theme.colors.muted }} role="status">
+                  Uploading…
+                </span>
+              ) : null}
+              <span style={{ fontSize: 11, color: theme.colors.muted }}>JPEG, PNG, GIF, WebP, or AVIF · max 5MB</span>
+            </div>
+            <div style={{ display: "grid", gap: 8 }}>
+              <span style={{ fontSize: 12, color: theme.colors.muted, fontWeight: 800 }}>Upload logo</span>
+              {profile.logo ? (
+                <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                  <img
+                    src={mediaUrl(profile.logo)}
+                    alt="Current logo"
+                    style={{
+                      maxWidth: 160,
+                      maxHeight: 80,
+                      objectFit: "contain",
+                      borderRadius: theme.radius.sm,
+                      border: `1px solid ${theme.colors.border}`,
+                      background: "rgba(255,255,255,0.04)",
+                    }}
+                  />
+                  <span style={{ fontSize: 12, color: theme.colors.muted }}>Current logo</span>
+                </div>
+              ) : null}
+              <label
+                style={{
+                  display: "inline-flex",
+                  flexDirection: "column",
+                  gap: 6,
+                  fontSize: 12,
+                  color: theme.colors.muted,
+                  fontWeight: 800,
+                  cursor: logoBusy ? "wait" : "pointer",
+                }}
+              >
+                <span>Choose file</span>
+                <input
+                  type="file"
+                  accept={BRANDING_ACCEPT}
+                  disabled={logoBusy}
+                  style={{ maxWidth: "100%", fontSize: 13, color: theme.colors.text }}
+                  onChange={async (e) => {
+                    const f = e.target.files?.[0];
+                    e.target.value = "";
+                    if (!f) return;
+                    setStatus("");
+                    setLogoBusy(true);
+                    try {
+                      const url = await uploadBrandingFile(f);
+                      const merged = { ...profile, logo: url };
+                      setProfile(merged);
+                      await apiPut(`/api/barber/profile${scopeQuery}`, merged, authHeaders());
+                      setStatus("Logo saved.");
+                    } catch (err) {
+                      setStatus(err instanceof Error ? err.message : "Upload failed");
+                    } finally {
+                      setLogoBusy(false);
+                    }
+                  }}
+                />
+              </label>
+              {logoBusy ? (
+                <span style={{ fontSize: 12, color: theme.colors.muted }} role="status">
+                  Uploading…
+                </span>
+              ) : null}
+              <span style={{ fontSize: 11, color: theme.colors.muted }}>JPEG, PNG, GIF, WebP, or AVIF · max 5MB</span>
+            </div>
             <Button variant="indigo" type="button" onClick={saveProfile}>
               Save profile
             </Button>
@@ -552,9 +705,110 @@ export default function BarberSettings() {
         <Card style={{ marginTop: 16 }}>
           <CardTitle>Payments</CardTitle>
           <div style={{ marginTop: 12, display: "grid", gap: 12 }}>
+            <div
+              style={{
+                padding: 12,
+                borderRadius: theme.radius.sm,
+                border: `1px solid ${theme.colors.border}`,
+                background: "rgba(255,255,255,0.02)",
+              }}
+            >
+              <div style={{ fontWeight: 900, color: theme.colors.text, marginBottom: 8 }}>Subscription plan (MVP)</div>
+              <p style={{ fontSize: 13, color: theme.colors.muted, marginBottom: 12 }}>
+                Tier controls AURA and booking deposits. Checkout integration is coming; monthly price is optional
+                until billing is connected.
+              </p>
+              <label style={{ display: "grid", gap: 6, fontSize: 12, color: theme.colors.muted, fontWeight: 800 }}>
+                Tier
+                <select
+                  style={{ ...inputStyle, cursor: "pointer" }}
+                  value={settings.subscription_tier}
+                  onChange={(e) => {
+                    const subscription_tier = e.target.value;
+                    setSettings({
+                      ...settings,
+                      subscription_tier,
+                      subscription_monthly_price: subscription_tier === "free" ? "" : settings.subscription_monthly_price,
+                    });
+                  }}
+                >
+                  <option value="free">Free — AURA and deposits off</option>
+                  <option value="pro">Pro — $9.99–$19.99/mo (full features)</option>
+                  <option value="elite">Elite — $29.99–$49.99/mo (full features)</option>
+                </select>
+              </label>
+              {settings.subscription_tier !== "free" ? (
+                <label
+                  style={{
+                    display: "grid",
+                    gap: 6,
+                    fontSize: 12,
+                    color: theme.colors.muted,
+                    fontWeight: 800,
+                    marginTop: 10,
+                  }}
+                >
+                  Planned monthly price (USD, optional)
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    style={inputStyle}
+                    placeholder={settings.subscription_tier === "elite" ? "29.99 – 49.99" : "9.99 – 19.99"}
+                    value={settings.subscription_monthly_price}
+                    onChange={(e) => setSettings({ ...settings, subscription_monthly_price: e.target.value })}
+                  />
+                </label>
+              ) : null}
+              <label
+                style={{
+                  display: "grid",
+                  gap: 6,
+                  fontSize: 12,
+                  color: theme.colors.muted,
+                  fontWeight: 800,
+                  marginTop: 10,
+                }}
+              >
+                Billing provider (reserved)
+                <select
+                  style={{ ...inputStyle, cursor: "pointer" }}
+                  value={settings.billing_provider}
+                  onChange={(e) => setSettings({ ...settings, billing_provider: e.target.value })}
+                >
+                  <option value="none">None yet</option>
+                  <option value="stripe">Stripe (future)</option>
+                  <option value="paypal">PayPal (future)</option>
+                </select>
+              </label>
+              <label
+                style={{
+                  display: "grid",
+                  gap: 6,
+                  fontSize: 12,
+                  color: theme.colors.muted,
+                  fontWeight: 800,
+                  marginTop: 10,
+                }}
+              >
+                External subscription id (reserved)
+                <input
+                  style={inputStyle}
+                  placeholder="Set automatically after checkout"
+                  value={settings.billing_subscription_id}
+                  onChange={(e) => setSettings({ ...settings, billing_subscription_id: e.target.value })}
+                />
+              </label>
+            </div>
+            {settings.subscription_tier === "free" ? (
+              <p style={{ fontSize: 13, color: theme.colors.muted }}>
+                Deposits are disabled on the Free plan. Upgrade to Pro or Elite to accept PayPal deposits.
+              </p>
+            ) : null}
             <label style={{ display: "flex", alignItems: "center", gap: 10, color: theme.colors.text, fontWeight: 800 }}>
               <input
                 type="checkbox"
+                disabled={settings.subscription_tier === "free"}
                 checked={settings.booking_deposit_enabled}
                 onChange={(e) => setSettings({ ...settings, booking_deposit_enabled: e.target.checked })}
               />
@@ -566,6 +820,7 @@ export default function BarberSettings() {
                 type="number"
                 min="0"
                 step="1"
+                disabled={settings.subscription_tier === "free"}
                 style={inputStyle}
                 value={settings.deposit_amount}
                 onChange={(e) => setSettings({ ...settings, deposit_amount: Number(e.target.value) })}
@@ -614,9 +869,16 @@ export default function BarberSettings() {
         <Card style={{ marginTop: 16 }}>
           <CardTitle>AI (AURA)</CardTitle>
           <div style={{ marginTop: 12, display: "grid", gap: 12 }}>
+            {settings.subscription_tier === "free" ? (
+              <p style={{ fontSize: 13, color: theme.colors.muted }}>
+                AURA is disabled on the Free plan. Your preferences are saved for when you move to Pro or Elite under
+                Payments → Subscription plan.
+              </p>
+            ) : null}
             <label style={{ display: "flex", alignItems: "center", gap: 10, color: theme.colors.text, fontWeight: 800 }}>
               <input
                 type="checkbox"
+                disabled={settings.subscription_tier === "free"}
                 checked={settings.aura_enabled}
                 onChange={(e) => setSettings({ ...settings, aura_enabled: e.target.checked })}
               />
@@ -626,6 +888,7 @@ export default function BarberSettings() {
               Voice (Amazon Polly id)
               <input
                 style={inputStyle}
+                disabled={settings.subscription_tier === "free"}
                 value={settings.aura_voice_type}
                 onChange={(e) => setSettings({ ...settings, aura_voice_type: e.target.value })}
               />
@@ -639,8 +902,15 @@ export default function BarberSettings() {
               />
             </label>
             <label style={{ display: "grid", gap: 6, fontSize: 12, color: theme.colors.muted, fontWeight: 800 }}>
-              Language
-              <input style={inputStyle} value={settings.language} onChange={(e) => setSettings({ ...settings, language: e.target.value })} />
+              Language (AURA + booking emails)
+              <select
+                style={{ ...inputStyle, cursor: "pointer" }}
+                value={settings.language === "es" ? "es" : "en"}
+                onChange={(e) => setSettings({ ...settings, language: e.target.value })}
+              >
+                <option value="en">English</option>
+                <option value="es">Spanish</option>
+              </select>
             </label>
             <Button variant="indigo" type="button" onClick={saveSettings}>
               Save AURA settings

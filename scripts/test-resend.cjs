@@ -6,8 +6,7 @@ const path = require("path");
 const dotenv = require("dotenv");
 
 const rootDir = path.join(__dirname, "..");
-dotenv.config({ path: path.join(rootDir, ".env") });
-dotenv.config({ path: path.join(rootDir, "backend", ".env"), override: true });
+dotenv.config({ path: path.join(rootDir, "backend", ".env") });
 
 const { sendEmail } = require(path.join(rootDir, "emailResend.cjs"));
 
@@ -22,7 +21,7 @@ async function main() {
   ).trim();
   if (!to) {
     console.error(
-      "Missing recipient: set RESEND_TEST_TO, EMAIL_USER, or BOOKING_ADMIN_EMAIL in .env / backend/.env"
+      "Missing recipient: set RESEND_TEST_TO, EMAIL_USER, or BOOKING_ADMIN_EMAIL in backend/.env"
     );
     process.exit(1);
   }

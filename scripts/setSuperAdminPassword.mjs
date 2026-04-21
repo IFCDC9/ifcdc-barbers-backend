@@ -15,8 +15,7 @@ import { normalizeEmail } from "../authStore.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, "..");
-dotenv.config({ path: path.join(root, ".env") });
-dotenv.config({ path: path.join(root, "backend", ".env"), override: true });
+dotenv.config({ path: path.join(root, "backend", ".env") });
 
 const email = normalizeEmail(process.env.SUPER_ADMIN_EMAIL || "service@ifcdc.org");
 const pwd = process.env.SUPER_ADMIN_PASSWORD;

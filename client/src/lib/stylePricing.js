@@ -38,6 +38,7 @@ export function parseTipAmount(serviceSubtotal, { tipPercent, tipAmount, customT
  * @param {object | null} publicPricing - from GET /api/barber/public/:id/pricing (optional)
  * @param {boolean} [publicPricing.deposits_allowed]
  * @param {number} [publicPricing.deposit_amount]
+ * @param {number} [publicPricing.platform_fee_usd] — IFCDC fee on Free tier (from public pricing API)
  */
 export function computeChargeBreakdown(stylePrice, paymentType, tipOpts = {}, publicPricing = null) {
   const totalPrice = roundMoney2(stylePrice);
@@ -54,12 +55,22 @@ export function computeChargeBreakdown(stylePrice, paymentType, tipOpts = {}, pu
 
   const useDeposit = depositsAllowed && paymentType === "deposit";
   const serviceCharge = useDeposit ? depositAmount : totalPrice;
-  const tipAmount = parseTipAmount(serviceCharge, tipOpts);
-  const paypalTotal = roundMoney2(serviceCharge + tipAmount);
+  const platformFee = roundMoney2(
+    publicPricing != null && Number(publicPricing.platform_fee_usd) > 0
+      ? Number(publicPricing.platform_fee_usd)
+      : 0,
+  );
+  const subtotalBeforeTip = roundMoney2(serviceCharge + platformFee);
+  const tipAmount = parseTipAmount(subtotalBeforeTip, tipOpts);
+  const paypalTotal = roundMoney2(subtotalBeforeTip + tipAmount);
+  const totalAmount = roundMoney2(totalPrice + platformFee);
   return {
     totalPrice,
     depositAmount,
     serviceCharge,
+    platformFee,
+    subtotalBeforeTip,
+    totalAmount,
     tipAmount,
     paypalTotal,
     paymentType: useDeposit ? "deposit" : "full",

@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url"
 import { createConnection } from "node:net"
 
 const root = resolve(fileURLToPath(new URL(".", import.meta.url)), "..")
-config({ path: resolve(root, ".env") })
+config({ path: resolve(root, "backend", ".env") })
 config({ path: resolve(root, "client", ".env") })
 
 function isPrivateLanHostname(hostname) {

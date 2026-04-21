@@ -68,8 +68,8 @@ function networkErrorHint() {
   if (env.DEV) {
     return (
       "In dev, requests go to /api on this origin and Vite proxies them to your backend. " +
-      "From the repo root run: npm run dev (API on :5050) or npm run dev:full (API + Vite). " +
-      "If the API is on another host/port, set VITE_DEV_API_PROXY_TARGET or VITE_API_BASE (LAN) in .env and restart Vite."
+      "From the repo root run: npm run dev (API on :5050) and npm run dev --prefix client, or npm run dev:all. " +
+      "If the API is on another host/port, set VITE_DEV_API_PROXY_TARGET in client/.env (or VITE_API_BASE) and restart Vite."
     )
   }
   return "Check VITE_API_BASE / VITE_API_URL and that the deployed API is up."

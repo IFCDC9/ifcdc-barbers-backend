@@ -12,21 +12,6 @@ function defaultBookingPriceUsd() {
   return Number.isFinite(n) && n > 0 ? n : 25;
 }
 
-function getTwilioClient() {
-  return globalThis.__ifcdcTwilioClient || null;
-}
-
-/** US NANP display, e.g. +13313168167 → (331) 316-8167 */
-function formatNanpUsDisplay(raw) {
-  const digits = String(raw ?? "").replace(/\D/g, "");
-  let n = digits;
-  if (n.length === 11 && n.startsWith("1")) n = n.slice(1);
-  if (n.length === 10) {
-    return `(${n.slice(0, 3)}) ${n.slice(3, 6)}-${n.slice(6)}`;
-  }
-  return String(raw ?? "").trim() || "";
-}
-
 function resolveBarberName(idNum) {
   if (!global.barbers || !Array.isArray(global.barbers)) {
     return `Barber #${idNum}`;
@@ -226,41 +211,9 @@ async function handleBookingPost(req, res) {
 
     console.log("[bookings] saved (in-memory)", { id: booking.id, paymentId: pid, service: serviceTrimmed });
 
-    /** SMS only after successful save; email below also runs only after save. */
-
-    let smsSent = false;
-    const client = getTwilioClient();
-    const auraFrom = String(process.env.AURA_PHONE_NUMBER || "").trim();
-    const twilioFrom = String(process.env.TWILIO_PHONE_NUMBER || "").trim();
-    const from = auraFrom || twilioFrom;
-    const to = phoneTrimmed;
-
-    let smsBody;
-    if (auraFrom) {
-      const display = formatNanpUsDisplay(auraFrom) || auraFrom;
-      smsBody = `You're booked! Need help? Text AURA at ${display}`;
-    } else {
-      smsBody = `Booking Confirmed!
-Barber: ${barberName}
-Date: ${trimmedDate}
-Time: ${trimmedTime}`;
-    }
-
-    if (client && from && to) {
-      try {
-        await client.messages.create({
-          body: smsBody,
-          from,
-          to,
-        });
-        smsSent = true;
-        console.log("[bookings] SMS SEND RESULT ok");
-      } catch (err) {
-        console.error("[bookings] SMS failed:", err.message);
-      }
-    } else {
-      console.log("[bookings] SMS skipped (no Twilio client, AURA_PHONE_NUMBER/TWILIO_PHONE_NUMBER, or phone)");
-    }
+    /** SMS: voice `sendConfirmationSMS` uses Twilio Messaging Service only. Minimal bookings do not send SMS here. */
+    const smsSent = false;
+    console.log("[bookings] SMS not sent from minimal route (voice booking uses sendConfirmationSMS only)");
 
     /** Resend only after booking row is persisted above — never before payment / save. */
     let emailSent = false;

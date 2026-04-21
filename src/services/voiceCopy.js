@@ -87,7 +87,7 @@ export const getShopHoursReply = () => {
 }
 
 export const getShopInformationReply = () => {
-  return `Welcome to IFCDC Barbers. This is ${RECEPTIONIST_NAME}. We're open Mon–Sat 9am–7pm, and I can also help you book your next appointment whenever you're ready.`
+  return `Welcome to Imperial Foundation CDC Barbers. This is ${RECEPTIONIST_NAME}. We're open Mon–Sat 9am–7pm, and I can also help you book your next appointment whenever you're ready.`
 }
 
 export const getQueueEmptyReply = () => {

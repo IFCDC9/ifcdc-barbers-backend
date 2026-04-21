@@ -56,6 +56,7 @@ export function parseTipAmount(serviceSubtotal, body = {}) {
  * @param {object} [opts] - optional barber overrides from `loadBarberDepositPricingOpts`
  * @param {boolean} [opts.barberDepositEnabled] - false disables deposits for this barber; true forces allow (if global off, still allow when true)
  * @param {number} [opts.barberDepositAmount] - fixed deposit in USD when > 0
+ * @param {number} [opts.platformFeeUsd] - IFCDC platform fee added before tip (Free tier = 0.99)
  */
 export function computeChargeBreakdown(stylePrice, paymentType, body = {}, opts = {}) {
   const totalPrice = roundMoney2(stylePrice);
@@ -73,12 +74,19 @@ export function computeChargeBreakdown(stylePrice, paymentType, body = {}, opts 
   const wantDeposit = String(paymentType || "").toLowerCase() === "deposit";
   const useDeposit = depositsAllowed && wantDeposit;
   const serviceCharge = useDeposit ? depositAmount : totalPrice;
-  const tipAmount = parseTipAmount(serviceCharge, body);
-  const paypalTotal = roundMoney2(serviceCharge + tipAmount);
+  const platformFee = roundMoney2(Number(opts.platformFeeUsd) || 0);
+  const subtotalBeforeTip = roundMoney2(serviceCharge + platformFee);
+  const tipAmount = parseTipAmount(subtotalBeforeTip, body);
+  const paypalTotal = roundMoney2(subtotalBeforeTip + tipAmount);
+  /** Service list price + platform fee (excludes tip) — stored on booking for revenue reporting. */
+  const totalAmount = roundMoney2(totalPrice + platformFee);
   return {
     totalPrice,
     depositAmount,
     serviceCharge,
+    platformFee,
+    subtotalBeforeTip,
+    totalAmount,
     tipAmount,
     paypalTotal,
     paymentType: useDeposit ? "deposit" : "full",

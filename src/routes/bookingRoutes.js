@@ -1,7 +1,7 @@
 import express from "express"
 import db from "../db/db.js"
 import { saveCustomer } from "../services/memoryService.js"
-import { sendSMS } from "../services/smsService.js"
+import { sendConfirmationSMS } from "../../voiceBookingSms.js"
 import { createPayPalOrder, capturePayPalOrder } from "../services/paypalService.js"
 import { sendEmail } from "../services/emailService.js"
 
@@ -426,10 +426,18 @@ router.post("/confirm", (req, res) => {
       console.log("EMAIL FAILED", e instanceof Error ? e.message : String(e))
     }
 
-    // SMS (best-effort)
+    // SMS (best-effort) — Messaging Service only via sendConfirmationSMS
     try {
       if (phone) {
-        const smsResult = await sendSMS(phone, `IFCDC: Your booking is confirmed. Payment ID: ${paymentId}`)
+        const smsResult = await sendConfirmationSMS(
+          {
+            phone,
+            date,
+            time,
+            smsBody: `IFCDC: Your booking is confirmed. Payment ID: ${paymentId}`,
+          },
+          { bookingId: booking?.id != null ? String(booking.id) : null },
+        )
         console.log("SMS SENT", smsResult)
       } else {
         console.log("SMS SKIPPED (no phone)")
@@ -539,14 +547,19 @@ router.post("/book", async (req, res) => {
     // 3. Create booking (pending where supported)
     const booking = await createBookingRecord(customer.id, service, date, time)
 
-    // 4. Send SMS confirmation
+    // 4. Send SMS confirmation (Messaging Service only)
     try {
-      await sendSMS(
-        phone,
-        "✅ Your appointment is confirmed!"
+      await sendConfirmationSMS(
+        {
+          phone,
+          date,
+          time,
+          smsBody: "IFCDC: Your appointment is confirmed!",
+        },
+        { bookingId: booking?.id != null ? String(booking.id) : null },
       )
     } catch (smsError) {
-      console.warn("⚠️ SMS notification failed:", smsError.message)
+      console.warn("SMS notification failed:", smsError instanceof Error ? smsError.message : String(smsError))
     }
 
     res.status(201).json({

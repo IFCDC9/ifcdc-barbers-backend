@@ -111,6 +111,52 @@ function htmlToPlainText(html) {
     .trim();
 }
 
+/** Customer-facing labels only (admin copies stay English). */
+function bookingEmailLabels(language) {
+  const es = String(language || "")
+    .trim()
+    .toLowerCase()
+    .startsWith("es");
+  if (es) {
+    return {
+      subjectFull: "Confirmación de reserva — IFCDC Barbers",
+      subjectDeposit: "Confirmación de reserva (depósito) — IFCDC Barbers",
+      h2: "Reserva confirmada",
+      lblName: "Nombre",
+      lblBarber: "Barbero",
+      lblService: "Servicio",
+      lblDate: "Fecha",
+      lblTime: "Hora",
+      lblDepositPaid: "Depósito pagado",
+      lblServiceTotal: "Total del servicio",
+      lblRemaining: "Saldo pendiente (normalmente el día de la cita)",
+      lblAmountPaid: "Monto pagado",
+      lblPaidInFull: "(pagado completo)",
+      lblTip: "Propina",
+      lblTotalCharged: "Total cobrado (PayPal)",
+      lblPayRef: "Referencia de pago",
+    };
+  }
+  return {
+    subjectFull: "Booking Confirmation - IFCDC Barbers",
+    subjectDeposit: "Booking confirmed (deposit) — IFCDC Barbers",
+    h2: "Booking Confirmed",
+    lblName: "Name",
+    lblBarber: "Barber",
+    lblService: "Service",
+    lblDate: "Date",
+    lblTime: "Time",
+    lblDepositPaid: "Deposit paid",
+    lblServiceTotal: "Service total",
+    lblRemaining: "Remaining balance (typically due at your appointment)",
+    lblAmountPaid: "Amount paid",
+    lblPaidInFull: "(paid in full)",
+    lblTip: "Tip",
+    lblTotalCharged: "Total charged (PayPal)",
+    lblPayRef: "Payment reference",
+  };
+}
+
 function isEmailConfigured() {
   return isResendConfigured();
 }
@@ -142,7 +188,7 @@ function logResendStatus() {
  * Primary booking confirmation — Resend only. **Throws** if the customer email fails after retries.
  * Optional admin copy to `BOOKING_ADMIN_EMAIL` or `service@ifcdc.org` — admin failure is logged, not thrown.
  *
- * @param {{ name: string, email: string, service: string, date: string, time: string, paymentId?: string, barberName?: string, totalPrice?: number, depositAmount?: number, amountPaid?: number, remainingBalance?: number, paymentType?: string }} p
+ * @param {{ name: string, email: string, service: string, date: string, time: string, paymentId?: string, barberName?: string, totalPrice?: number, depositAmount?: number, amountPaid?: number, remainingBalance?: number, paymentType?: string, language?: string }} p
  */
 async function sendBookingEmail({
   name,
@@ -159,6 +205,7 @@ async function sendBookingEmail({
   paymentType,
   tipAmount,
   totalPaid,
+  language,
 } = {}) {
   const resend = getResend();
   if (!resend) {
@@ -182,31 +229,32 @@ async function sendBookingEmail({
   const safeTime = escapeHtml(time || "TBD");
   const safePay = paymentId ? escapeHtml(String(paymentId)) : "";
   const safeBarber = escapeHtml(barberName || "");
+  const labels = bookingEmailLabels(language);
   const isDeposit = String(paymentType || "").toLowerCase() === "deposit";
   const fmt = (n) => (Number.isFinite(Number(n)) ? Number(n).toFixed(2) : "—");
   const tip = Number(tipAmount) || 0;
   const totalCharged = Number.isFinite(Number(totalPaid)) ? Number(totalPaid) : (Number(amountPaid) || 0) + tip;
   const tipLine =
     tip > 0
-      ? `<p><strong>Tip:</strong> $${fmt(tip)} USD</p><p><strong>Total charged (PayPal):</strong> $${fmt(totalCharged)} USD</p>`
+      ? `<p><strong>${labels.lblTip}:</strong> $${fmt(tip)} USD</p><p><strong>${labels.lblTotalCharged}:</strong> $${fmt(totalCharged)} USD</p>`
       : "";
   const payLines = isDeposit
-    ? `<p><strong>Deposit paid:</strong> $${fmt(amountPaid)} USD</p>
-       <p><strong>Service total:</strong> $${fmt(totalPrice)} USD</p>
-       <p><strong>Remaining balance:</strong> $${fmt(remainingBalance)} USD (typically due at your appointment)</p>
+    ? `<p><strong>${labels.lblDepositPaid}:</strong> $${fmt(amountPaid)} USD</p>
+       <p><strong>${labels.lblServiceTotal}:</strong> $${fmt(totalPrice)} USD</p>
+       <p><strong>${labels.lblRemaining}:</strong> $${fmt(remainingBalance)} USD</p>
        ${tipLine}`
-    : `<p><strong>Amount paid:</strong> $${fmt(amountPaid ?? totalPrice)} USD (paid in full)</p>
+    : `<p><strong>${labels.lblAmountPaid}:</strong> $${fmt(amountPaid ?? totalPrice)} USD ${labels.lblPaidInFull}</p>
        ${tipLine}`;
 
   const html = `
-<h2>Booking Confirmed</h2>
-<p>Name: ${safeName}</p>
-${safeBarber ? `<p>Barber: ${safeBarber}</p>` : ""}
-<p>Service: ${safeService}</p>
-<p>Date: ${safeDate}</p>
-<p>Time: ${safeTime}</p>
+<h2>${labels.h2}</h2>
+<p>${labels.lblName}: ${safeName}</p>
+${safeBarber ? `<p>${labels.lblBarber}: ${safeBarber}</p>` : ""}
+<p>${labels.lblService}: ${safeService}</p>
+<p>${labels.lblDate}: ${safeDate}</p>
+<p>${labels.lblTime}: ${safeTime}</p>
 ${payLines}
-${safePay ? `<p>Payment reference: ${safePay}</p>` : ""}
+${safePay ? `<p>${labels.lblPayRef}: ${safePay}</p>` : ""}
   `.trim();
 
   const plain = htmlToPlainText(html);
@@ -214,9 +262,7 @@ ${safePay ? `<p>Payment reference: ${safePay}</p>` : ""}
   /** Same as GET /api/test-email — `sendEmail({ to, subject, html })` → RESEND_API_KEY + MAIL_FROM. */
   const customerResult = await sendEmail({
     to: toAddr,
-    subject: isDeposit
-      ? "Booking confirmed (deposit) — IFCDC Barbers"
-      : "Booking Confirmation - IFCDC Barbers",
+    subject: isDeposit ? labels.subjectDeposit : labels.subjectFull,
     html,
     text: plain,
     label: "booking-confirmation",
@@ -282,6 +328,7 @@ async function sendBookingConfirmationEmail({
   paymentType,
   tipAmount,
   totalPaid,
+  language,
 } = {}) {
   await sendBookingEmail({
     name,
@@ -298,6 +345,7 @@ async function sendBookingConfirmationEmail({
     paymentType,
     tipAmount,
     totalPaid,
+    language,
   });
   return { ok: true };
 }
@@ -322,22 +370,33 @@ async function sendAuraVoiceBookingEmail(booking = {}) {
   const recipients = Array.from(new Set([clientEmail, "service@ifcdc.org"]));
   console.log("EMAIL FINAL RECIPIENTS:", recipients);
 
+  const es = String(booking.language || "")
+    .trim()
+    .toLowerCase()
+    .startsWith("es");
   const safeName = escapeHtml(String(booking.name || "Guest"));
   const safeTime = escapeHtml(trimmedDateTime(booking.date, booking.time) || String(booking.time || "TBD"));
   const safeBarber = escapeHtml(String(booking.barberName || booking.barber || "TBD"));
 
+  const h2 = es ? "Cita confirmada" : "Appointment Confirmed";
+  const lnName = es ? "Nombre" : "Name";
+  const lnTime = es ? "Hora" : "Time";
+  const lnBarber = es ? "Barbero" : "Barber";
+  const subject = es ? "Cita confirmada — IFCDC Barbers" : "Booking Confirmed — IFCDC Barbers";
+
   const html = `
-    <h2>Appointment Confirmed</h2>
-    <p>Name: ${safeName}</p>
-    <p>Time: ${safeTime}</p>
-    <p>Barber: ${safeBarber}</p>
+    <h2>${h2}</h2>
+    <p>${lnName}: ${safeName}</p>
+    <p>${lnTime}: ${safeTime}</p>
+    <p>${lnBarber}: ${safeBarber}</p>
   `.trim();
 
   await resend.emails.send({
     from: "IFCDC Barbers <notifications@ifcdcbarbersapp.com>",
     to: recipients,
-    subject: "Booking Confirmed",
+    subject,
     html,
+    text: htmlToPlainText(html),
   });
 
   return { ok: true };

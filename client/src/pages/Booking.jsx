@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { PayPalButtons, usePayPalScriptReducer } from "@paypal/react-paypal-js";
-import { getApiOrigin, getBarbers, mediaUrl, fetchBarberPublicPricing } from "../services/api.js";
+import { getApiOrigin, getBarbers, mediaUrl, fetchBarberPublicPricing, fetchBookingQuote } from "../services/api.js";
 import { computeChargeBreakdown, depositEnabled } from "../lib/stylePricing.js";
 import {
   canOpenDirectionsToShop,
@@ -156,7 +156,6 @@ function BookingPayPalBlock({
                 body: JSON.stringify({
                   styleId,
                   barberId,
-                  amount: chargeAmountUsd,
                   paymentType,
                   ...(Number(tipPercent) > 0 ? { tipPercent: Number(tipPercent) } : {}),
                   ...(Number(tipAmount) > 0 ? { tipAmount: Number(tipAmount) } : {}),
@@ -353,6 +352,8 @@ export default function Booking() {
   }, [tipChoice, customTip]);
 
   const [barberPricing, setBarberPricing] = useState(null);
+  const [serverQuote, setServerQuote] = useState(null);
+  const [quoteLoading, setQuoteLoading] = useState(false);
 
   const [payChoice, setPayChoice] = useState(() => (depositEnabled() ? "deposit" : "full"));
   const [savedBookingSnapshot, setSavedBookingSnapshot] = useState(null);
@@ -365,10 +366,12 @@ export default function Booking() {
     }
   }, [barberPricing, stylePriceUsd, selectedStyle?.styleId]);
 
-  const breakdown = useMemo(
-    () => computeChargeBreakdown(stylePriceUsd, payChoice, tipOpts, barberPricing),
-    [stylePriceUsd, payChoice, tipOpts, barberPricing],
-  );
+  const breakdown = useMemo(() => {
+    if (serverQuote?.breakdown && selectedStyle?.styleId) {
+      return serverQuote.breakdown;
+    }
+    return computeChargeBreakdown(stylePriceUsd, payChoice, tipOpts, barberPricing);
+  }, [serverQuote, selectedStyle?.styleId, stylePriceUsd, payChoice, tipOpts, barberPricing]);
 
   const chargeAmountUsd = breakdown.paypalTotal;
   const remainingAfterPayUsd = Math.round(Math.max(0, breakdown.totalPrice - breakdown.serviceCharge) * 100) / 100;
@@ -525,6 +528,34 @@ export default function Booking() {
       cancelled = true;
     };
   }, [selectedStyle?.barberId, form.barberId]);
+
+  useEffect(() => {
+    const bid = selectedStyle?.barberId ?? form.barberId;
+    const sid = selectedStyle?.styleId;
+    if (!sid || bid == null || !Number.isFinite(Number(bid))) {
+      setServerQuote(null);
+      return;
+    }
+    let cancelled = false;
+    setQuoteLoading(true);
+    fetchBookingQuote(Number(bid), {
+      styleId: String(sid),
+      paymentType: payChoice === "deposit" ? "deposit" : "full",
+      ...tipOpts,
+    })
+      .then((j) => {
+        if (!cancelled) setServerQuote(j && j.ok ? j : null);
+      })
+      .catch(() => {
+        if (!cancelled) setServerQuote(null);
+      })
+      .finally(() => {
+        if (!cancelled) setQuoteLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedStyle?.styleId, selectedStyle?.barberId, form.barberId, payChoice, tipOpts]);
 
   useEffect(() => {
     if (!selectedStyle?.styleId || !barberOptions.length) return;
@@ -967,6 +998,10 @@ export default function Booking() {
             <dd>{breakdown.tipAmount > 0 ? `$${breakdown.tipAmount.toFixed(2)}` : "None"}</dd>
           </div>
           <div>
+            <dt>Subtotal (pay now, before tip)</dt>
+            <dd>${Number(breakdown.subtotalBeforeTip ?? breakdown.serviceCharge + (breakdown.platformFee || 0)).toFixed(2)} USD</dd>
+          </div>
+          <div>
             <dt>Total due now (PayPal)</dt>
             <dd className="ifcdc-booking-price">${breakdown.paypalTotal.toFixed(2)} USD</dd>
           </div>
@@ -1002,8 +1037,12 @@ export default function Booking() {
                 </div>
                 <p className="ifcdc-page-hint" style={{ marginTop: 8 }}>
                   {payChoice === "deposit"
-                    ? `You will pay $${breakdown.serviceCharge.toFixed(2)} now (plus any tip). Remaining service balance: $${remainingAfterPayUsd.toFixed(2)}.`
-                    : `You will pay the full $${breakdown.totalPrice.toFixed(2)} for this style (plus any tip).`}
+                    ? Number(breakdown.platformFee) > 0
+                      ? `You will pay $${breakdown.serviceCharge.toFixed(2)} deposit plus $${Number(breakdown.platformFee).toFixed(2)} platform fee now (plus any tip). Remaining service balance: $${remainingAfterPayUsd.toFixed(2)}.`
+                      : `You will pay $${breakdown.serviceCharge.toFixed(2)} deposit now (plus any tip). Remaining service balance: $${remainingAfterPayUsd.toFixed(2)}.`
+                    : Number(breakdown.platformFee) > 0
+                      ? `You will pay the full $${breakdown.totalPrice.toFixed(2)} for this style plus $${Number(breakdown.platformFee).toFixed(2)} platform fee (plus any tip).`
+                      : `You will pay the full $${breakdown.totalPrice.toFixed(2)} for this style (plus any tip).`}
                 </p>
               </>
             ) : (

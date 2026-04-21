@@ -27,7 +27,7 @@ export function isSmsConfigured() {
   return Boolean(
     process.env.TWILIO_ACCOUNT_SID?.trim()
     && process.env.TWILIO_AUTH_TOKEN?.trim()
-    && process.env.TWILIO_PHONE_NUMBER?.trim()
+    && process.env.TWILIO_MESSAGING_SERVICE_SID?.trim()
   )
 }
 

@@ -34,11 +34,33 @@ export async function ensureBookingsTable() {
   await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS tip_amount NUMERIC(10,2);`);
   await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS total_paid NUMERIC(10,2);`);
   await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS phone TEXT;`);
+  await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS platform_fee NUMERIC(10,2) NOT NULL DEFAULT 0;`);
+  await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS total_amount NUMERIC(10,2);`);
+  // These must run even if client_id FK is deferred (FK add is at end of this file).
+  await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS booking_status TEXT NOT NULL DEFAULT 'confirmed';`);
+  await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS is_paid_booking BOOLEAN NOT NULL DEFAULT false;`);
+  await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS client_id BIGINT;`);
 
   await dbQuery(`UPDATE bookings SET tip_amount = 0 WHERE tip_amount IS NULL;`);
   await dbQuery(
     `UPDATE bookings SET total_paid = COALESCE(amount_paid, 0) + COALESCE(tip_amount, 0) WHERE total_paid IS NULL;`
   );
+  await dbQuery(`UPDATE bookings SET platform_fee = 0 WHERE platform_fee IS NULL;`);
+  await dbQuery(`
+    UPDATE bookings SET total_amount = round((COALESCE(total_price, amount, 0) + COALESCE(platform_fee, 0))::numeric, 2)
+    WHERE total_amount IS NULL;
+  `);
+  await dbQuery(`UPDATE bookings SET is_paid_booking = false;`);
+  await dbQuery(`
+    UPDATE bookings SET is_paid_booking = true
+    WHERE payment_provider = 'paypal'
+      AND payment_status IN ('paid', 'deposit_paid');
+  `);
+  await dbQuery(`
+    UPDATE bookings SET booking_status = 'pending'
+    WHERE payment_provider = 'voice'
+       OR payment_status = 'pay_in_person';
+  `);
   await dbQuery(`
     UPDATE bookings SET
       total_price = COALESCE(total_price, amount),
@@ -86,16 +108,110 @@ export async function ensureBookingsTable() {
     $m$;
   `);
 
-  // Slot uniqueness once deposit or full payment captured (same barber + slot).
+  // Slot uniqueness: confirmed + paid-through-app (PayPal) only — pending / voice do not hold the slot.
   await dbQuery(`DROP INDEX IF EXISTS bookings_slot_unique_paid;`);
   await dbQuery(`
-    CREATE UNIQUE INDEX IF NOT EXISTS bookings_slot_unique_paid
+    CREATE UNIQUE INDEX IF NOT EXISTS bookings_slot_unique_confirmed_paid
     ON bookings (barber_id, date, time)
-    WHERE payment_status IN ('paid', 'deposit_paid');
+    WHERE booking_status = 'confirmed'
+      AND is_paid_booking = true
+      AND payment_status IN ('paid', 'deposit_paid');
   `);
 
   await dbQuery(`CREATE INDEX IF NOT EXISTS bookings_created_at_idx ON bookings (created_at DESC);`);
   await dbQuery(`CREATE INDEX IF NOT EXISTS bookings_barber_id_idx ON bookings (barber_id);`);
   await dbQuery(`CREATE INDEX IF NOT EXISTS bookings_payment_status_idx ON bookings (payment_status);`);
+
+  await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS sms_status TEXT;`);
+  await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS sms_error_code TEXT;`);
+  await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS sms_error_message TEXT;`);
+  await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS message_sid TEXT;`);
+  await dbQuery(`
+    CREATE INDEX IF NOT EXISTS bookings_message_sid_idx
+    ON bookings (message_sid)
+    WHERE message_sid IS NOT NULL AND btrim(message_sid) <> '';
+  `);
+
+  await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS deposit_required BOOLEAN NOT NULL DEFAULT false;`);
+  await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS deposit_status VARCHAR(50) NOT NULL DEFAULT 'not_required';`);
+  await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS deposit_payment_link TEXT;`);
+  await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS deposit_transaction_id TEXT;`);
+  await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS deposit_paypal_order_id TEXT;`);
+  await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS platform_fee_status VARCHAR(50) NOT NULL DEFAULT 'pending';`);
+  await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS barber_payout_amount NUMERIC(10,2) NOT NULL DEFAULT 0;`);
+  await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS barber_fee_billed BOOLEAN NOT NULL DEFAULT false;`);
+
+  await dbQuery(`
+    CREATE TABLE IF NOT EXISTS barber_fee_ledger (
+      id BIGSERIAL PRIMARY KEY,
+      barber_id BIGINT NOT NULL,
+      booking_id UUID,
+      fee_amount NUMERIC(10,2) NOT NULL DEFAULT 0.99,
+      fee_status VARCHAR(50) NOT NULL DEFAULT 'accrued',
+      billed_at TIMESTAMPTZ,
+      paid_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+  await dbQuery(`CREATE INDEX IF NOT EXISTS barber_fee_ledger_barber_id_idx ON barber_fee_ledger (barber_id);`);
+  await dbQuery(`
+    DO $m$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'public.barber_fee_ledger'::regclass
+          AND conname = 'barber_fee_ledger_booking_id_key'
+      ) THEN
+        ALTER TABLE barber_fee_ledger
+          ADD CONSTRAINT barber_fee_ledger_booking_id_key UNIQUE (booking_id);
+      END IF;
+    END
+    $m$;
+  `);
+  try {
+    await dbQuery(`
+      DO $m$
+      BEGIN
+        IF to_regclass('public.bookings') IS NULL THEN
+          RETURN;
+        END IF;
+        IF EXISTS (
+          SELECT 1 FROM pg_constraint
+          WHERE conrelid = 'public.barber_fee_ledger'::regclass
+            AND conname = 'barber_fee_ledger_booking_id_fkey'
+        ) THEN
+          RETURN;
+        END IF;
+        ALTER TABLE barber_fee_ledger
+          ADD CONSTRAINT barber_fee_ledger_booking_id_fkey
+          FOREIGN KEY (booking_id) REFERENCES bookings(id) ON DELETE SET NULL;
+      END $m$;
+    `);
+  } catch (e) {
+    console.warn("[migrate] barber_fee_ledger booking_id FK skipped:", e?.message || e);
+  }
+
+  try {
+    await dbQuery(`
+      DO $m$
+      BEGIN
+        IF to_regclass('public.barber_clients') IS NULL THEN
+          RETURN;
+        END IF;
+        IF EXISTS (
+          SELECT 1 FROM pg_constraint
+          WHERE conrelid = 'public.bookings'::regclass
+            AND conname = 'bookings_client_id_fkey'
+        ) THEN
+          RETURN;
+        END IF;
+        ALTER TABLE bookings
+          ADD CONSTRAINT bookings_client_id_fkey
+          FOREIGN KEY (client_id) REFERENCES barber_clients(id) ON DELETE SET NULL;
+      END $m$;
+    `);
+  } catch (e) {
+    console.warn("[migrate] bookings client_id FK skipped:", e?.message || e);
+  }
 }
 

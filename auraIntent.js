@@ -3,17 +3,24 @@
  * Strong keyword pass first; chat API may fall back to OpenAI when no match.
  */
 
-/** @typedef {{ matched: true, intent: string, action: string, reply: string } | { matched: false }} AuraKeywordResult */
+import {
+  chatKeywordReply,
+  localizedKeywordFallback,
+  localizedUnclearFallback,
+  normalizeBarberLang,
+  voiceIntentReply,
+} from "./auraLocale.js";
 
-const FALLBACK_SAY =
-  "Say book a haircut, ask for styles, or ask for pricing.";
+/** @typedef {{ matched: true, intent: string, action: string, reply: string } | { matched: false }} AuraKeywordResult */
 
 /**
  * Keyword-only structured intent (no network).
  * @param {string} message
+ * @param {string} [lang] barber language hint (`en` | `es`)
  * @returns {AuraKeywordResult}
  */
-export function auraStructuredIntentFromKeywords(message) {
+export function auraStructuredIntentFromKeywords(message, lang = "en") {
+  const L = normalizeBarberLang(lang);
   const raw = String(message || "").trim();
   const s = raw.toLowerCase();
   console.log("AURA INPUT:", raw || "(empty)");
@@ -30,8 +37,7 @@ export function auraStructuredIntentFromKeywords(message) {
       matched: true,
       intent: "PRICING",
       action: "NAVIGATE_STYLES",
-      reply:
-        "Each style has its own price. Open Styles in the app to compare, or say book a haircut when you are ready.",
+      reply: chatKeywordReply(L, "PRICING"),
     };
   }
 
@@ -52,7 +58,7 @@ export function auraStructuredIntentFromKeywords(message) {
       matched: true,
       intent: "NAVIGATE_BOOK",
       action: "NAVIGATE_BOOK",
-      reply: "Let's get you booked.",
+      reply: chatKeywordReply(L, "NAVIGATE_BOOK"),
     };
   }
 
@@ -70,7 +76,7 @@ export function auraStructuredIntentFromKeywords(message) {
       matched: true,
       intent: "NAVIGATE_STYLES",
       action: "NAVIGATE_STYLES",
-      reply: "Here are our styles — opening the list for you.",
+      reply: chatKeywordReply(L, "NAVIGATE_STYLES"),
     };
   }
 
@@ -81,10 +87,11 @@ export function auraStructuredIntentFromKeywords(message) {
 /**
  * Legacy shape for server routes that branch on `kind`.
  * @param {string} raw
+ * @param {string} [lang]
  * @returns {{ kind: "book" | "styles" | "pricing" | "llm" }}
  */
-export function auraDetectIntent(raw) {
-  const r = auraStructuredIntentFromKeywords(raw);
+export function auraDetectIntent(raw, lang = "en") {
+  const r = auraStructuredIntentFromKeywords(raw, lang);
   if (!r.matched) return { kind: "llm" };
   if (r.intent === "PRICING") return { kind: "pricing" };
   if (r.intent === "NAVIGATE_STYLES") return { kind: "styles" };
@@ -92,31 +99,33 @@ export function auraDetectIntent(raw) {
   return { kind: "llm" };
 }
 
-export function auraUnclearFallbackReply() {
-  return `I got you. I can help you book, view styles, or check pricing. ${FALLBACK_SAY}`;
+/** @param {string} [lang] */
+export function auraUnclearFallbackReply(lang = "en") {
+  return localizedUnclearFallback(lang);
 }
 
-export function auraKeywordFallbackReply() {
-  return FALLBACK_SAY;
+/** @param {string} [lang] */
+export function auraKeywordFallbackReply(lang = "en") {
+  return localizedKeywordFallback(lang);
 }
 
 /**
  * AURA 2.0 — voice line: natural-language intents (keyword-first, no network).
  * @param {string} raw
+ * @param {string} [lang]
  * @returns {{ matched: true, intent: string, reply: string } | { matched: false }}
  */
-export function auraVoiceIntentFromSpeech(raw) {
+export function auraVoiceIntentFromSpeech(raw, lang = "en") {
+  const L = normalizeBarberLang(lang);
   const t = String(raw || "").trim();
   const s = t.toLowerCase();
   if (!t) return { matched: false };
-
-  const shop = "IFCDC Barbers";
 
   if (/\b(cancel|call off)\b/.test(s) && /\b(appointment|booking|cut|visit|slot)\b/.test(s)) {
     return {
       matched: true,
       intent: "CANCEL",
-      reply: `I got you. Cancellations are handled by the team so nothing slips through the cracks. Say speak to staff, or text the shop after this call.`,
+      reply: voiceIntentReply(L, "CANCEL"),
     };
   }
 
@@ -124,7 +133,7 @@ export function auraVoiceIntentFromSpeech(raw) {
     return {
       matched: true,
       intent: "RESCHEDULE",
-      reply: `Let me check that for you. Reschedules go through the front desk — say speak to staff and we'll sort it fast.`,
+      reply: voiceIntentReply(L, "RESCHEDULE"),
     };
   }
 
@@ -132,7 +141,7 @@ export function auraVoiceIntentFromSpeech(raw) {
     return {
       matched: true,
       intent: "LATE_ARRIVAL",
-      reply: `You're good — it happens. Give us a heads-up when you can, and we'll protect your chair as long as we can. Say speak to staff if you're cutting it close.`,
+      reply: voiceIntentReply(L, "LATE_ARRIVAL"),
     };
   }
 
@@ -143,7 +152,7 @@ export function auraVoiceIntentFromSpeech(raw) {
     return {
       matched: true,
       intent: "SPEAK_TO_STAFF",
-      reply: `One moment while I handle that. For the owner-level answer, ask for the front desk during business hours — say hours if you need our open times.`,
+      reply: voiceIntentReply(L, "SPEAK_TO_STAFF"),
     };
   }
 
@@ -151,7 +160,7 @@ export function auraVoiceIntentFromSpeech(raw) {
     return {
       matched: true,
       intent: "DIRECTIONS",
-      reply: `I got you. Open ${shop} on your phone for the map pin, or say hours and I'll line up the best time to pull up.`,
+      reply: voiceIntentReply(L, "DIRECTIONS"),
     };
   }
 
@@ -159,7 +168,7 @@ export function auraVoiceIntentFromSpeech(raw) {
     return {
       matched: true,
       intent: "HOURS",
-      reply: `We're professional hours, seven days a week energy — say directions if you need the address, or tell me what you need and I'll route it.`,
+      reply: voiceIntentReply(L, "HOURS"),
     };
   }
 
@@ -167,7 +176,7 @@ export function auraVoiceIntentFromSpeech(raw) {
     return {
       matched: true,
       intent: "PRICING",
-      reply: `Let me check that for you. Pricing tracks the cut and the barber — open Styles in the app for exact numbers, or say book when you're ready to lock in.`,
+      reply: voiceIntentReply(L, "PRICING"),
     };
   }
 
@@ -175,7 +184,7 @@ export function auraVoiceIntentFromSpeech(raw) {
     return {
       matched: true,
       intent: "BARBER_AVAILABILITY",
-      reply: `I got you. Chairs turn fast — tell me the day you want, and I'll get you into the booking flow clean.`,
+      reply: voiceIntentReply(L, "BARBER_AVAILABILITY"),
     };
   }
 
@@ -192,6 +201,6 @@ export function auraVoiceIntentFromSpeech(raw) {
   return {
     matched: true,
     intent: "GENERAL",
-    reply: `I got you. I'm here for booking, hours, directions, pricing, or the front desk — tell me what you need today.`,
+    reply: voiceIntentReply(L, "GENERAL"),
   };
 }

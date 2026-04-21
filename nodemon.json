@@ -1,7 +1,3 @@
 {
-  "watch": ["src", "server"],
-  "ext": "js,json,ts",
-  "delay": 750,
-  "signal": "SIGUSR2",
-  "ignore": ["client/**", "**/node_modules/**", "uploads/**", "*.test.js"]
+  "ignore": ["client/**", "node_modules/**", "mobile/**", "uploads/**", "**/*.test.js"]
 }

@@ -9,6 +9,11 @@ CREATE TABLE IF NOT EXISTS appointments (
   service TEXT,
   appointment_time TIMESTAMP,
   price DECIMAL(10,2),
+  service_price DECIMAL(10,2),
+  platform_fee DECIMAL(10,2) DEFAULT 0.99,
+  barber_payout DECIMAL(10,2),
+  payment_status VARCHAR(50) DEFAULT 'pending',
+  payout_status VARCHAR(50) DEFAULT 'unpaid',
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 

@@ -74,13 +74,7 @@ export function validateProductionEnvironment() {
   if (!isNonEmpty(process.env.OPENAI_API_KEY)) errors.push("OPENAI_API_KEY is missing")
   if (!isNonEmpty(process.env.TWILIO_ACCOUNT_SID)) errors.push("TWILIO_ACCOUNT_SID is missing")
   if (!isNonEmpty(process.env.TWILIO_AUTH_TOKEN)) errors.push("TWILIO_AUTH_TOKEN is missing")
-  if (!isNonEmpty(process.env.TWILIO_PHONE_NUMBER)) errors.push("TWILIO_PHONE_NUMBER is missing")
-  else {
-    const phone = String(process.env.TWILIO_PHONE_NUMBER).trim()
-    if (!phone.startsWith("+")) {
-      errors.push("TWILIO_PHONE_NUMBER must be E.164 (start with +)")
-    }
-  }
+  // SMS must be non-blocking. If TWILIO_MESSAGING_SERVICE_SID is missing, SMS is disabled.
 
   const publicBase =
     process.env.PUBLIC_BASE_URL?.trim()

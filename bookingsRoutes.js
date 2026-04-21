@@ -2,12 +2,17 @@ import express from "express";
 import { extractBearerToken, resolveAuthPayload } from "./authRoutes.js";
 import { dbQuery } from "./db.js";
 import { getPayPalHttpClient, ordersGetRequest } from "./paypalClient.js";
+import { roundMoney2, depositsAllowedForBooking } from "./styleBookingPricing.js";
 import {
-  roundMoney2,
-  computeChargeBreakdown,
-  depositsAllowedForBooking,
-} from "./styleBookingPricing.js";
-import { assertSlotWithinAvailability, loadBarberDepositPricingOpts } from "./barberScope.js";
+  assertSlotWithinAvailability,
+  loadBarberDepositPricingOpts,
+  loadBarberSettingsRow,
+  resolveOrCreateBarberClientId,
+} from "./barberScope.js";
+import { computeStyleBookingBreakdown } from "./bookingBreakdown.js";
+import { BARBER_PLATFORM_FEE_USD, barberDepositsEffective } from "./subscriptionTier.js";
+import { insertBarberFeeLedgerRow } from "./barberFeeLedger.js";
+import { createDepositPaymentLink } from "./depositPaymentLink.js";
 
 function getAuthPayload(req) {
   const token = extractBearerToken(req.get("authorization"));
@@ -97,17 +102,48 @@ export async function insertAuraVoiceBookingRow(body, sendBookingEmail) {
     styleRow && Number(styleRow.price) > 0 ? Number(styleRow.price) : Number(body.price) > 0 ? Number(body.price) : 25
   );
 
+  let settingsRow = null;
+  try {
+    settingsRow = await loadBarberSettingsRow(barberId);
+  } catch {
+    settingsRow = null;
+  }
+  const barberPlatformFee = roundMoney2(BARBER_PLATFORM_FEE_USD);
+  const barberPayoutAmount = roundMoney2(Math.max(0, totalPrice - barberPlatformFee));
+  const totalAmount = roundMoney2(totalPrice);
+
+  const depositTierOk = settingsRow ? barberDepositsEffective(settingsRow) : false;
+  const depositCfg = Number(settingsRow?.deposit_amount) || 0;
+  const depositEnabledForBarber = Boolean(settingsRow?.booking_deposit_enabled);
+  const depositRequired =
+    depositTierOk && depositEnabledForBarber && depositCfg > 0 && totalPrice > 0;
+  const depositAmountVoice = depositRequired
+    ? roundMoney2(Math.min(depositCfg, Math.max(0.01, totalPrice - 0.01)))
+    : 0;
+  const depositStatus = depositRequired ? "pending" : "not_required";
+
+  let clientId = null;
+  try {
+    clientId = await resolveOrCreateBarberClientId(barberId, customerName, customerEmail);
+  } catch {
+    /* optional */
+  }
+
   const stamp = Date.now();
   const voiceOrderId = `voice_order:${callSid}:${stamp}`;
   const voiceCaptureId = `voice_cap:${callSid}:${stamp}`;
 
   const insert = await dbQuery(
     `INSERT INTO bookings
-     (user_id, customer_name, customer_email, phone, barber_name, barber_id, service, date, time, amount,
+     (user_id, customer_name, customer_email, phone, barber_name, barber_id, client_id, service, date, time, amount,
       total_price, deposit_amount, amount_paid, remaining_balance,
       payment_type, payment_status, payment_provider, paypal_order_id, paypal_capture_id,
-      style_id, style_title, style_image_url, tip_amount, total_paid)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8::date,$9::time,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)
+      style_id, style_title, style_image_url, tip_amount, total_paid,
+      platform_fee, total_amount, booking_status, is_paid_booking,
+      deposit_required, deposit_status, deposit_payment_link, deposit_transaction_id, deposit_paypal_order_id,
+      platform_fee_status, barber_payout_amount, barber_fee_billed)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::date,$10::time,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,
+             $30,$31,$32,$33,$34,$35,$36,$37)
      ON CONFLICT (paypal_capture_id) DO NOTHING
      RETURNING id, created_at`,
     [
@@ -117,15 +153,16 @@ export async function insertAuraVoiceBookingRow(body, sendBookingEmail) {
       customerPhone || null,
       barberName || null,
       barberId,
+      clientId,
       serviceTitle,
       dateStr,
       timeStr,
       totalPrice,
       totalPrice,
-      0,
+      depositRequired ? depositAmountVoice : 0,
       0,
       totalPrice,
-      "full",
+      depositRequired ? "deposit" : "full",
       "pay_in_person",
       "voice",
       voiceOrderId,
@@ -135,6 +172,18 @@ export async function insertAuraVoiceBookingRow(body, sendBookingEmail) {
       styleImageUrl,
       0,
       0,
+      barberPlatformFee,
+      totalAmount,
+      "pending",
+      false,
+      depositRequired,
+      depositStatus,
+      null,
+      null,
+      null,
+      "pending",
+      barberPayoutAmount,
+      false,
     ]
   );
 
@@ -145,6 +194,13 @@ export async function insertAuraVoiceBookingRow(body, sendBookingEmail) {
   const bookingId = insert.rows[0].id;
   let emailSent = false;
   let emailError = null;
+  let bookingLanguage = "en";
+  try {
+    const st = await loadBarberSettingsRow(barberId);
+    bookingLanguage = st?.language || "en";
+  } catch {
+    /* default en */
+  }
   try {
     const r = await sendBookingEmail?.({
       name: customerName,
@@ -161,6 +217,7 @@ export async function insertAuraVoiceBookingRow(body, sendBookingEmail) {
       paymentType: "full",
       tipAmount: 0,
       totalPaid: 0,
+      language: bookingLanguage,
     });
     emailSent = !r?.error;
     emailError = r?.error || null;
@@ -186,6 +243,10 @@ export async function insertAuraVoiceBookingRow(body, sendBookingEmail) {
       totalPrice,
       paymentStatus: "pay_in_person",
       paymentProvider: "voice",
+      depositRequired,
+      depositAmount: depositRequired ? depositAmountVoice : 0,
+      depositStatus,
+      depositPaymentLink: null,
     },
     emailSent,
     emailError,
@@ -253,12 +314,13 @@ export function createBookingsRouter({ sendBookingEmail, requireAdmin } = {}) {
 
   // Admin list
   router.get("/api/admin/bookings", guard, async (_req, res) => {
-    const r = await dbQuery(
-      `SELECT id, user_id, customer_name, customer_email, barber_name, barber_id, service, date, time,
+      const r = await dbQuery(
+      `SELECT id, user_id, customer_name, customer_email, barber_name, barber_id, client_id, service, date, time,
               phone,
               amount, total_price, deposit_amount, amount_paid, remaining_balance,
               payment_type, payment_status, payment_provider, paypal_order_id, paypal_capture_id,
-              style_id, style_title, style_image_url, tip_amount, total_paid, created_at
+              style_id, style_title, style_image_url, tip_amount, total_paid,
+              platform_fee, total_amount, booking_status, is_paid_booking, created_at
        FROM bookings
        ORDER BY created_at DESC
        LIMIT 500`
@@ -354,13 +416,16 @@ export function createBookingsRouter({ sendBookingEmail, requireAdmin } = {}) {
 
   // Admin stats compatible with existing UI
   router.get("/api/admin/stats", guard, async (_req, res) => {
-    const r = await dbQuery(
-      `SELECT id, customer_name AS name, customer_email AS customerEmail,
+    try {
+      const r = await dbQuery(
+        `SELECT id, customer_name AS name, customer_email AS customerEmail,
               phone,
               barber_name AS barber, barber_id AS barberId,
               service, style_title AS "styleTitle", date::text AS date, to_char(time, 'HH24:MI') AS time,
               amount::float AS price,
               total_price::float AS "totalPrice",
+              platform_fee::float AS "platformFee",
+              total_amount::float AS "totalAmount",
               deposit_amount::float AS "depositAmount",
               amount_paid::float AS "amountPaid",
               remaining_balance::float AS "remainingBalance",
@@ -368,6 +433,8 @@ export function createBookingsRouter({ sendBookingEmail, requireAdmin } = {}) {
               total_paid::float AS "totalPaid",
               payment_type AS "paymentType",
               payment_status AS "rawPaymentStatus",
+              booking_status AS "bookingStatus",
+              is_paid_booking AS "isPaidBooking",
               CASE
                 WHEN payment_status = 'paid' THEN 'paid_paypal'
                 WHEN payment_status = 'deposit_paid' THEN 'deposit_paypal'
@@ -380,33 +447,61 @@ export function createBookingsRouter({ sendBookingEmail, requireAdmin } = {}) {
        FROM bookings
        ORDER BY created_at DESC
        LIMIT 500`
-    );
-    const rows = r.rows || [];
-    const totalGross = rows.reduce((s, b) => s + Number(b.totalPrice ?? b.price ?? 0), 0);
-    const totalCollected = rows.reduce((s, b) => s + Number(b.totalPaid ?? b.amountPaid ?? b.price ?? 0), 0);
-    const outstandingBalanceAmount = rows.reduce((s, b) => s + Number(b.remainingBalance || 0), 0);
-    const pendingPaymentsAmount = rows
-      .filter((b) => b.paymentStatus === "pay_in_person")
-      .reduce((s, b) => s + Number(b.totalPrice ?? b.price ?? 0), 0);
+      );
+      const rows = r.rows || [];
+      let platformAgg = { platformFeesCollected: 0, paidBookingsCount: 0, confirmedBookingsCount: 0 };
+      try {
+        const ar = await dbQuery(
+          `SELECT
+           COALESCE(SUM(platform_fee) FILTER (WHERE is_paid_booking = true), 0)::float8 AS platform_fees_collected,
+           COUNT(*) FILTER (WHERE is_paid_booking = true)::int AS paid_bookings,
+           COUNT(*) FILTER (WHERE booking_status = 'confirmed')::int AS confirmed_bookings,
+           COUNT(*)::int AS all_bookings
+         FROM bookings`,
+        );
+        const a = ar.rows?.[0] || {};
+        platformAgg = {
+          platformFeesCollected: Number(a.platform_fees_collected) || 0,
+          paidBookingsCount: Number(a.paid_bookings) || 0,
+          confirmedBookingsCount: Number(a.confirmed_bookings) || 0,
+          allBookingsCount: Number(a.all_bookings) || 0,
+        };
+      } catch (e) {
+        console.warn("[booking] platform aggregate:", e?.message || e);
+      }
+      const totalGross = rows.reduce((s, b) => s + Number(b.totalPrice ?? b.price ?? 0), 0);
+      const totalCollected = rows.reduce((s, b) => s + Number(b.totalPaid ?? b.amountPaid ?? b.price ?? 0), 0);
+      const outstandingBalanceAmount = rows.reduce((s, b) => s + Number(b.remainingBalance || 0), 0);
+      const pendingPaymentsAmount = rows
+        .filter((b) => b.paymentStatus === "pay_in_person")
+        .reduce((s, b) => s + Number(b.totalPrice ?? b.price ?? 0), 0);
 
-    res.json({
-      totalRevenue: totalGross,
-      todayRevenue: 0,
-      totalRevenuePlatform: totalCollected,
-      totalBarberEarnings: 0,
-      pendingPaymentsAmount,
-      pendingPaymentsCount: rows.filter((b) => b.paymentStatus === "pay_in_person").length,
-      outstandingBalanceAmount,
-      outstandingBalanceCount: rows.filter((b) => Number(b.remainingBalance || 0) > 0).length,
-      totalPlatformEarnings: totalCollected,
-      totalBookings: rows.length,
-      bookings: rows,
-      todayYmd: null,
-      topServices: {},
-      avgBooking: rows.length ? totalGross / rows.length : 0,
-      highestPayment: rows.length ? Math.max(...rows.map((b) => Number(b.totalPrice ?? b.price ?? 0))) : 0,
-      lastPaymentAt: rows[0]?.created_at || null,
-    });
+      return res.json({
+        totalRevenue: totalGross,
+        todayRevenue: 0,
+        totalRevenuePlatform: totalCollected,
+        totalBarberEarnings: 0,
+        pendingPaymentsAmount,
+        pendingPaymentsCount: rows.filter((b) => b.paymentStatus === "pay_in_person").length,
+        outstandingBalanceAmount,
+        outstandingBalanceCount: rows.filter((b) => Number(b.remainingBalance || 0) > 0).length,
+        totalPlatformEarnings: totalCollected,
+        platformFeesCollected: platformAgg.platformFeesCollected,
+        paidBookingsCount: platformAgg.paidBookingsCount,
+        confirmedBookingsCount: platformAgg.confirmedBookingsCount,
+        allBookingsCount: platformAgg.allBookingsCount,
+        totalBookings: rows.length,
+        bookings: rows,
+        todayYmd: null,
+        topServices: {},
+        avgBooking: rows.length ? totalGross / rows.length : 0,
+        highestPayment: rows.length ? Math.max(...rows.map((b) => Number(b.totalPrice ?? b.price ?? 0))) : 0,
+        lastPaymentAt: rows[0]?.created_at || null,
+      });
+    } catch (e) {
+      console.error("[booking] admin stats failed:", e?.stack || e);
+      return res.status(500).json({ error: "stats_failed", message: e?.message || String(e) });
+    }
   });
 
   /**
@@ -468,27 +563,43 @@ export function createBookingsRouter({ sendBookingEmail, requireAdmin } = {}) {
         return res.status(400).json({ error: "style_required", message: "Select a style before completing payment" });
       }
 
-      const styleRow = await loadStyleRow(styleId);
-      if (!styleRow) {
-        return res.status(400).json({ error: "style_not_found", message: "Style not found" });
-      }
-      if (Number(styleRow.barber_id) !== barberId) {
-        return res.status(400).json({ error: "barber_mismatch", message: "Style does not match selected barber" });
+      const depositOpts = await loadBarberDepositPricingOpts(barberId);
+      const paymentTypeRaw = normalizePaymentType(body, depositOpts);
+      const quoted = await computeStyleBookingBreakdown({
+        styleId,
+        barberId,
+        paymentType: paymentTypeRaw,
+        body,
+      });
+      if (!quoted.ok) {
+        return res.status(quoted.status || 400).json({ error: quoted.error, message: quoted.message });
       }
 
-      const depositOpts = await loadBarberDepositPricingOpts(barberId);
+      const styleRow = await loadStyleRow(styleId);
+      if (!styleRow || String(styleRow.id) !== quoted.styleId) {
+        return res.status(400).json({ error: "style_not_found", message: "Style not found" });
+      }
+
       const slotOk = await assertSlotWithinAvailability(barberId, dateStr, timeStr);
       if (!slotOk.ok) {
         return res.status(400).json({ error: "slot_not_available", message: slotOk.message || "Time not available" });
       }
 
-      const paymentTypeRaw = normalizePaymentType(body, depositOpts);
-      const stylePrice = roundMoney2(Number(styleRow.price));
-      const breakdown = computeChargeBreakdown(stylePrice, paymentTypeRaw, body, depositOpts);
-      const { totalPrice, depositAmount, serviceCharge, tipAmount, paypalTotal, paymentType } = breakdown;
-      const serviceTitle = String(styleRow.title || "").trim() || "Style";
+      const breakdown = quoted.breakdown;
+      const { totalPrice, depositAmount, serviceCharge, platformFee, totalAmount, tipAmount, paypalTotal, paymentType } =
+        breakdown;
+      const barberBookingFee = roundMoney2(BARBER_PLATFORM_FEE_USD);
+      const barberPayoutStored = roundMoney2(Math.max(0, totalPrice - barberBookingFee));
+      const serviceTitle = quoted.styleTitle || String(styleRow.title || "").trim() || "Style";
       const remainingBalance = roundMoney2(Math.max(0, totalPrice - serviceCharge));
       const paymentStatus = paymentType === "deposit" ? "deposit_paid" : "paid";
+
+      let clientId = null;
+      try {
+        clientId = await resolveOrCreateBarberClientId(barberId, customerName, customerEmail);
+      } catch {
+        /* optional */
+      }
 
       console.log("[booking] verify capture", {
         paypalOrderId,
@@ -508,15 +619,19 @@ export function createBookingsRouter({ sendBookingEmail, requireAdmin } = {}) {
       }
 
       const userId = getAuthUserId(req);
-      const styleImageUrl = styleRow.image_url ? String(styleRow.image_url) : null;
+      const styleImageUrl = quoted.styleImageUrl ?? (styleRow.image_url ? String(styleRow.image_url) : null);
 
       const insert = await dbQuery(
         `INSERT INTO bookings
-         (user_id, customer_name, customer_email, barber_name, barber_id, service, date, time, amount,
+         (user_id, customer_name, customer_email, barber_name, barber_id, client_id, service, date, time, amount,
           total_price, deposit_amount, amount_paid, remaining_balance,
           payment_type, payment_status, payment_provider, paypal_order_id, paypal_capture_id,
-          style_id, style_title, style_image_url, tip_amount, total_paid)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
+          style_id, style_title, style_image_url, tip_amount, total_paid,
+          platform_fee, total_amount, booking_status, is_paid_booking,
+          deposit_required, deposit_status, deposit_payment_link, deposit_transaction_id, deposit_paypal_order_id,
+          platform_fee_status, barber_payout_amount, barber_fee_billed)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,
+                 $29,$30,$31,$32,$33,$34,$35,$36)
          ON CONFLICT (paypal_capture_id) DO NOTHING
          RETURNING id, created_at`,
         [
@@ -525,6 +640,7 @@ export function createBookingsRouter({ sendBookingEmail, requireAdmin } = {}) {
           customerEmail,
           barberName || null,
           barberId,
+          clientId,
           serviceTitle,
           dateStr,
           timeStr,
@@ -543,6 +659,18 @@ export function createBookingsRouter({ sendBookingEmail, requireAdmin } = {}) {
           styleImageUrl,
           tipAmount,
           paypalTotal,
+          barberBookingFee,
+          totalAmount,
+          "confirmed",
+          true,
+          false,
+          "not_required",
+          null,
+          null,
+          null,
+          "pending",
+          barberPayoutStored,
+          false,
         ]
       );
 
@@ -563,6 +691,14 @@ export function createBookingsRouter({ sendBookingEmail, requireAdmin } = {}) {
       const bookingId = insert.rows[0].id;
       console.log("[booking] saved", { bookingId, paypalCaptureId, paymentType, paymentStatus, styleId });
 
+      let payBookingLang = "en";
+      try {
+        const st = await loadBarberSettingsRow(barberId);
+        payBookingLang = st?.language || "en";
+      } catch {
+        /* default en */
+      }
+
       let emailSent = false;
       let emailError = null;
       try {
@@ -581,6 +717,7 @@ export function createBookingsRouter({ sendBookingEmail, requireAdmin } = {}) {
           paymentType,
           tipAmount,
           totalPaid: paypalTotal,
+          language: payBookingLang,
         });
         emailSent = !r?.error;
         emailError = r?.error || null;
@@ -605,6 +742,8 @@ export function createBookingsRouter({ sendBookingEmail, requireAdmin } = {}) {
           customerEmail,
           price: totalPrice,
           totalPrice,
+          platformFee,
+          totalAmount,
           depositAmount,
           amountPaid: serviceCharge,
           tipAmount,
@@ -613,6 +752,8 @@ export function createBookingsRouter({ sendBookingEmail, requireAdmin } = {}) {
           paymentType,
           paymentStatus: paymentStatus === "paid" ? "paid_paypal" : "deposit_paypal",
           rawPaymentStatus: paymentStatus,
+          bookingStatus: "confirmed",
+          isPaidBooking: true,
           paypalOrderId,
           paymentId: paypalCaptureId,
           paymentProvider: "paypal",

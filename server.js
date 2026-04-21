@@ -1,8 +1,8 @@
 /**
  * IFCDC Barbers API — ESM entry (`"type": "module"`).
- * Loads env: project root `.env` first, then `backend/.env` (override) so backend wins for the same keys.
+ * `./loadBackendEnv.mjs` MUST stay first — loads `backend/.env` (absolute path) before other imports run.
  */
-import dotenv from "dotenv";
+import "./loadBackendEnv.mjs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import cors from "cors";
@@ -24,17 +24,62 @@ import {
   auraStructuredIntentFromKeywords,
   auraKeywordFallbackReply,
 } from "./auraIntent.js";
+import {
+  auraChatNavigateBook,
+  auraChatNavigateStylesSuffix,
+  normalizeBarberLang,
+  openAiLanguageInstruction,
+} from "./auraLocale.js";
+import { loadBarberSettingsRow } from "./barberScope.js";
+import { barberAuraEffective } from "./subscriptionTier.js";
 import { auraFetchStyleTitles } from "./auraData.js";
 import { attachAuraVoiceRoutes, attachAuraSmsWebhook } from "./auraVoiceRoutes.js";
+import { getPublicApiBaseUrl } from "./auraVoiceReply.js";
+import { ssmlThanksCallingOpener } from "./auraVoiceSsml.js";
+import { handleTwilioSmsStatusCallback } from "./voiceBookingSms.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-dotenv.config({ path: path.join(__dirname, ".env") });
-dotenv.config({ path: path.join(__dirname, "backend", ".env"), override: true });
+
+function stripOuterQuotes(s) {
+  let t = String(s ?? "").trim();
+  if ((t.startsWith('"') && t.endsWith('"')) || (t.startsWith("'") && t.endsWith("'"))) {
+    t = t.slice(1, -1).trim();
+  }
+  return t;
+}
+
+console.log("ENV CHECK:");
+console.log("PUBLIC_API_URL =", process.env.PUBLIC_API_URL ?? "(undefined)");
+
+const rawPublic = stripOuterQuotes(process.env.PUBLIC_API_URL);
+if (!rawPublic) {
+  console.error("❌ PUBLIC_API_URL NOT LOADED");
+  process.exit(1);
+}
+
+/** Voice Twilio callbacks — single public origin (no trailing slash). */
+const BASE_URL = rawPublic.replace(/\/$/, "");
+process.env.PUBLIC_API_URL = BASE_URL;
+console.log("✅ AURA BASE URL:", BASE_URL);
+
+const twilioMsSid = stripOuterQuotes(process.env.TWILIO_MESSAGING_SERVICE_SID || "").replace(/\s/g, "");
+process.env.TWILIO_MESSAGING_SERVICE_SID = twilioMsSid;
+console.log("📡 USING SERVICE SID (normalized):", twilioMsSid);
+console.log("📎 SMS status callback (set in Twilio Messaging Service → Integration):", `${BASE_URL}/api/sms/status`);
+
+process.on("uncaughtException", (err) => {
+  console.error("UNCAUGHT EXCEPTION:", err);
+});
+
+process.on("unhandledRejection", (reason) => {
+  console.error("UNHANDLED REJECTION:", reason);
+});
+
+const PORT = parseInt(String(process.env.PORT || "5050"), 10) || 5050;
 
 const AURA_NUMBER = process.env.AURA_PHONE_NUMBER;
 const BUSINESS_PHONE = process.env.BUSINESS_PHONE || "+13313168167";
 
-console.log("ENV CHECK:");
 console.log("RESEND_API_KEY:", process.env.RESEND_API_KEY ? "LOADED" : "MISSING");
 console.log("MAIL_FROM:", process.env.MAIL_FROM);
 console.log(
@@ -50,13 +95,54 @@ console.log(
   "AURA_PHONE_NUMBER:",
   AURA_NUMBER ? "set" : "missing",
   "OPENAI_API_KEY:",
-  process.env.OPENAI_API_KEY ? "set" : "missing"
+  process.env.OPENAI_API_KEY ? "set" : "missing",
+  "PUBLIC_API_URL:",
+  BASE_URL,
 );
 
 const AURA_ASSISTANT_PROMPT =
   "You are AURA, an intelligent assistant for a barbershop booking app. Your job is to help users book appointments, view styles, understand pricing, and guide them to take action. Be short, clear, and helpful.";
 
 const AURA_FAILSAFE_REPLY = "I'm having trouble right now, try again.";
+
+/** JSON for GET /api/aura/status (no secrets). */
+function auraStatusPayload() {
+  const wiz = String(process.env.AURA_VOICE_WIZARD || "").trim() === "1";
+  const pub = getPublicApiBaseUrl();
+  return {
+    ok: true,
+    voice: {
+      mode: wiz ? "wizard" : "simple",
+      paths: wiz
+        ? ["/api/aura/voice", "/api/aura/voice/incoming"]
+        : ["/api/aura/voice", "/api/aura/voice/incoming", "/api/aura/process"],
+      diagnostic: {
+        testRoute: "GET /api/aura/test",
+        voiceDiagnosticEnv: String(process.env.AURA_VOICE_DIAGNOSTIC || "").trim() === "1",
+        testResponseEnv: String(process.env.AURA_VOICE_TEST_RESPONSE || "").trim() === "1",
+      },
+      publicBaseUrlConfigured: Boolean(pub),
+      webhookBaseUrl: pub || null,
+      twilioWebhookUrl: pub ? `${pub}/api/aura/voice` : null,
+      gatherActionUrl: pub ? `${pub}/api/aura/voice` : null,
+      processUrl: !wiz && pub ? `${pub}/api/aura/process` : null,
+    },
+    chat: {
+      path: "/api/aura",
+      openai: Boolean(String(process.env.OPENAI_API_KEY || "").trim()),
+      freeTierBypass: String(process.env.AURA_ALLOW_FREE_TIER_CHAT || "").trim() === "1",
+    },
+    twilio: {
+      accountConfigured: Boolean(
+        String(process.env.TWILIO_ACCOUNT_SID || "").trim() && String(process.env.TWILIO_AUTH_TOKEN || "").trim(),
+      ),
+      messagingServiceConfigured: Boolean(String(process.env.TWILIO_MESSAGING_SERVICE_SID || "").trim()),
+      /** Voice “Call Now” outbound caller ID — not used for SMS (Messaging Service only). */
+      voiceCallerIdConfigured: Boolean(String(process.env.TWILIO_PHONE_NUMBER || "").trim()),
+      auraPhoneConfigured: Boolean(String(process.env.AURA_PHONE_NUMBER || "").trim()),
+    },
+  };
+}
 
 /** Last user text for intent routing (prefer latest `messages` entry). */
 function auraLastUserText(body) {
@@ -117,31 +203,6 @@ const twilioClient =
 
 globalThis.__ifcdcTwilioClient = twilioClient;
 
-/**
- * Twilio outbound SMS from the AURA line (`from` must be a Twilio number on this account).
- * Prefer calling from trusted server paths only (e.g. booking confirmations, admin tests).
- */
-async function sendAuraSms(message, userPhone) {
-  const client = globalThis.__ifcdcTwilioClient;
-  const to = normalizeOutboundTo(userPhone);
-  if (!client || !String(process.env.AURA_PHONE_NUMBER || "").trim() || !to || !String(message || "").trim()) {
-    return { ok: false, skipped: true };
-  }
-  try {
-    const created = await client.messages.create({
-      body: String(message).trim(),
-      from: process.env.AURA_PHONE_NUMBER,
-      to,
-    });
-    return { ok: true, sid: created.sid };
-  } catch (err) {
-    console.error("[sendAuraSms]", err?.message || err);
-    return { ok: false, error: err?.message || String(err) };
-  }
-}
-
-globalThis.__ifcdcSendAuraSms = sendAuraSms;
-
 /** E.164 for Twilio `calls.create` — US 10-digit → +1…; otherwise require leading +. */
 function normalizeOutboundTo(raw) {
   const s = String(raw ?? "").trim();
@@ -172,7 +233,8 @@ function resolveVoiceTwimlUrl() {
 function defaultOutboundCallTwiml() {
   const custom = String(process.env.TWILIO_CALL_TWIML || "").trim();
   if (custom) return custom;
-  return `<Response><Say voice="Polly.Ivy" language="en-US">Hello from IFCDC Barbers. Thanks for calling.</Say></Response>`;
+  const greet = ssmlThanksCallingOpener("en");
+  return `<?xml version="1.0" encoding="UTF-8"?><Response><Say voice="Polly.Ivy" language="en-US">${greet}</Say></Response>`;
 }
 
 const app = express();
@@ -182,6 +244,15 @@ app.set("trust proxy", 1);
 app.use(cors({ origin: "*" }));
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
+
+app.post("/api/sms/status", (req, res) => {
+  console.log("📬 DELIVERY UPDATE:", req.body);
+  res.sendStatus(200);
+  void handleTwilioSmsStatusCallback(req.body || {}).catch((e) => {
+    console.error("[api/sms/status] handler error:", e);
+  });
+});
+
 app.use(
   session({
     secret: String(process.env.SESSION_SECRET || "aura-secret"),
@@ -222,6 +293,21 @@ app.post("/api/login", async (req, res) => {
 app.post("/api/register", async (req, res) => {
   req.url = "/register";
   authRouter.handle(req, res, () => {});
+});
+
+app.get("/api/aura/status", (_req, res) => {
+  res.json(auraStatusPayload());
+});
+
+/** Local/ngrok wiring check — no Twilio body required. */
+app.get("/api/aura/test", (req, res) => {
+  console.log("✅ TEST ROUTE HIT", {
+    time: new Date().toISOString(),
+    path: req.path,
+    ip: req.ip,
+    ua: String(req.get("user-agent") || "").slice(0, 120),
+  });
+  res.send("AURA TEST OK");
 });
 
 /**
@@ -323,8 +409,12 @@ const insertAuraVoiceRow = (body) =>
 attachAuraVoiceRoutes(app, { insertVoiceRow: insertAuraVoiceRow });
 attachAuraSmsWebhook(app, { insertVoiceRow: insertAuraVoiceRow });
 console.log(
-  "[aura] Webhook routes attached: POST /api/aura/voice (TwiML Say→Gather), POST /api/aura/sms, GET /api/aura/voice (TwiML probe)",
+  "[aura] Webhook routes attached: GET|POST /api/aura/voice (Twilio POST + GET probe), POST /api/aura/sms, GET /api/aura/test" +
+    (String(process.env.AURA_VOICE_WIZARD || "").trim() === "1"
+      ? " [AURA_VOICE_WIZARD=1: legacy voice booking wizard — unset for OpenAI simple voice]"
+      : " [voice: instant TwiML → POST /api/aura/process (OpenAI) → Gather → /api/aura/voice — set AURA_VOICE_WIZARD=1 only for the old booking wizard]"),
 );
+console.log("[aura] GET /api/aura/status — wiring check (OpenAI / Twilio flags, no secrets)");
 
 // NOTE: in-memory booking routes removed for production persistence.
 
@@ -351,11 +441,18 @@ app.get("/health", (req, res) => {
   res.json({ ok: true, service: "ifcdc-barbers-api" });
 });
 
+app.get("/api/health", (req, res) => {
+  const payload = { status: "OK" };
+  if (String(req.query.aura || "").trim() === "1") {
+    payload.aura = auraStatusPayload();
+  }
+  res.json(payload);
+});
+
 app.get("/voice", (req, res) => {
   res.set("Content-Type", "text/xml; charset=utf-8");
-  res.send(
-    `<Response><Say voice="Polly.Ivy" language="en-US">Welcome to IFCDC Barbers.</Say></Response>`,
-  );
+  const greet = ssmlThanksCallingOpener("en");
+  res.send(`<?xml version="1.0" encoding="UTF-8"?><Response><Say voice="Polly.Ivy" language="en-US">${greet}</Say></Response>`);
 });
 
 /**
@@ -442,45 +539,6 @@ app.get("/test-email", handleGetTestEmail);
 app.post("/api/test-email", handlePostTestEmail);
 app.post("/test-email", handlePostTestEmail);
 
-/**
- * POST /api/test-aura-sms — send one SMS from `AURA_PHONE_NUMBER` (Twilio).
- * Requires header `x-admin-key` matching `ADMIN_SECRET`. Body: `{ "to": "+1…", "body": "…" }`.
- */
-app.post("/api/test-aura-sms", async (req, res) => {
-  try {
-    const key = String(req.get("x-admin-key") || "").trim();
-    const secret = String(process.env.ADMIN_SECRET || "").trim();
-    if (!secret || key !== secret) {
-      return res.status(401).json({ ok: false, error: "unauthorized" });
-    }
-    const userPhone = String(req.body?.to || "").trim();
-    const message = String(req.body?.body || "").trim();
-    if (!userPhone || !message) {
-      return res.status(400).json({
-        ok: false,
-        error: "to_and_body_required",
-        message: 'Send JSON { "to": "+15551234567", "body": "Hello from AURA" }',
-      });
-    }
-    const result = await sendAuraSms(message, userPhone);
-    if (result.skipped) {
-      return res.status(503).json({
-        ok: false,
-        error: "aura_sms_unconfigured",
-        message:
-          "Need TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, and AURA_PHONE_NUMBER (Twilio E.164) plus a valid `to`.",
-      });
-    }
-    if (!result.ok) {
-      return res.status(500).json({ ok: false, error: result.error || "send_failed" });
-    }
-    return res.json({ ok: true, sid: result.sid });
-  } catch (e) {
-    console.error("[api/test-aura-sms]", e?.stack || e);
-    return res.status(500).json({ ok: false, message: e?.message || String(e) });
-  }
-});
-
 /** Public config for the client (business phone, etc.). */
 app.get("/api/config", (_req, res) => {
   const phone = String(BUSINESS_PHONE).trim();
@@ -518,12 +576,40 @@ app.post("/api/aura", async (req, res) => {
     }
 
     const lastUser = auraLastUserText({ message, messages: thread });
-    const kw = auraStructuredIntentFromKeywords(lastUser);
+
+    const bodyBid = Number(req.body?.barberId ?? req.body?.barber_id);
+    let barberLang = "en";
+    if (Number.isFinite(bodyBid) && bodyBid > 0) {
+      try {
+        const st = await loadBarberSettingsRow(bodyBid);
+        barberLang = st?.language || "en";
+        const allowFreeAuraChat = String(process.env.AURA_ALLOW_FREE_TIER_CHAT || "").trim() === "1";
+        if (!barberAuraEffective(st) && !allowFreeAuraChat) {
+          const L0 = normalizeBarberLang(barberLang);
+          const reply =
+            L0 === "es"
+              ? "AURA no está disponible en el plan Free. Actualiza a Pro o Elite para activar el asistente."
+              : "AURA is not available on the Free plan. Upgrade to Pro or Elite to enable the assistant.";
+          return res.status(403).json({
+            error: "plan_limited",
+            message: reply,
+            reply,
+            action: "NONE",
+            aura_available: false,
+          });
+        }
+      } catch (e) {
+        console.warn("[aura] barber settings:", e?.message || e);
+      }
+    }
+    const L = normalizeBarberLang(barberLang);
+
+    const kw = auraStructuredIntentFromKeywords(lastUser, L);
     if (kw.matched) {
       console.log("AURA INTENT:", kw.intent);
       if (kw.intent === "NAVIGATE_BOOK") {
         return res.json({
-          reply: "I got you. I'm setting up your booking now.",
+          reply: auraChatNavigateBook(L),
           action: "NAVIGATE_BOOK",
         });
       }
@@ -532,13 +618,17 @@ app.post("/api/aura", async (req, res) => {
         try {
           const titles = await auraFetchStyleTitles(30);
           if (titles.length) {
-            extra = ` Styles we offer include: ${titles.join(", ")}.`;
+            extra =
+              L === "es"
+                ? ` Estilos que ofrecemos: ${titles.join(", ")}.`
+                : ` Styles we offer include: ${titles.join(", ")}.`;
           }
         } catch (e) {
           console.warn("[aura] style list:", e?.message || e);
         }
+        const opener = L === "es" ? "Listo — abriendo estilos ahora." : "I got you — opening styles now.";
         return res.json({
-          reply: `I got you — opening styles now.${extra} Pick one in the app, then continue to book.`,
+          reply: `${opener}${extra}${auraChatNavigateStylesSuffix(L)}`,
           action: "NAVIGATE_STYLES",
         });
       }
@@ -553,33 +643,39 @@ app.post("/api/aura", async (req, res) => {
     // Prevent dead ends: for unclear short messages, respond instantly (no OpenAI).
     const cleaned = String(lastUser || "").trim();
     const wordCount = cleaned ? cleaned.split(/\s+/).filter(Boolean).length : 0;
-    if (!cleaned || wordCount <= 2 || /\b(help|what can you do|options)\b/i.test(cleaned)) {
-      return res.json({ reply: auraUnclearFallbackReply(), action: "NONE" });
+    if (
+      !cleaned ||
+      wordCount <= 2 ||
+      /\b(help|what can you do|options|ayuda|qu[eé] puedes hacer|opci[oó]nes)\b/i.test(cleaned)
+    ) {
+      return res.json({ reply: auraUnclearFallbackReply(L), action: "NONE" });
     }
 
     const apiKey = String(process.env.OPENAI_API_KEY || "").trim();
     if (!apiKey) {
       return res.status(200).json({
-        reply: auraKeywordFallbackReply(),
+        reply: auraKeywordFallbackReply(L),
         action: "NONE",
       });
     }
 
     const model = String(process.env.OPENAI_MODEL || "gpt-4o-mini").trim();
-    let system = AURA_ASSISTANT_PROMPT;
+    let system = AURA_ASSISTANT_PROMPT + openAiLanguageInstruction(L);
     if (/\b(price|cost|pricing|how\s+much)\b/i.test(cleaned)) {
       system +=
-        " The user may be asking about price or cost. Explain that each style has its own price on the Styles page, and they should open Styles to compare. Do not invent dollar amounts.";
+        L === "es"
+          ? " El usuario puede preguntar por precio. Explique que cada estilo tiene su precio en la página Estilos y que abra Estilos para comparar. No invente montos en dólares."
+          : " The user may be asking about price or cost. Explain that each style has its own price on the Styles page, and they should open Styles to compare. Do not invent dollar amounts.";
     }
 
     const out = await auraOpenAiChat({ apiKey, model, systemPrompt: system, thread });
-    const base = String(out.reply || "").trim() || auraUnclearFallbackReply();
+    const base = String(out.reply || "").trim() || auraUnclearFallbackReply(L);
     // Add a gentle next-step suggestion (without sounding uncertain).
-    const reply =
-      base +
-      (/\b(book|booking|appointment)\b/i.test(base)
-        ? ""
-        : "\n\nIf you want, tell me: book, styles, or pricing — and I’ll take you there.");
+    const navigateHint =
+      L === "es"
+        ? "\n\nSi quiere, diga: reservar, estilos o precios — y lo llevo."
+        : "\n\nIf you want, tell me: book, styles, or pricing — and I’ll take you there.";
+    const reply = base + (/\b(book|booking|appointment)\b/i.test(base) ? "" : navigateHint);
     return res.json({ reply, action: "NONE" });
   } catch (e) {
     console.error("[aura]", e?.stack || e);
@@ -603,6 +699,12 @@ async function startServer() {
     console.error("[migrate] app_users/role failed:", e?.message || e);
   }
   try {
+    await ensureBarberBusinessTables();
+    console.log("[migrate] barber business tables: ok");
+  } catch (e) {
+    console.error("[migrate] barber business failed:", e?.message || e);
+  }
+  try {
     await ensureBookingsTable();
   } catch (e) {
     console.error("[migrate] bookings failed:", e?.message || e);
@@ -615,12 +717,6 @@ async function startServer() {
     console.error("[migrate] styles failed:", e?.message || e);
   }
   try {
-    await ensureBarberBusinessTables();
-    console.log("[migrate] barber business tables: ok");
-  } catch (e) {
-    console.error("[migrate] barber business failed:", e?.message || e);
-  }
-  try {
     const r = await ensureInitialSuperAdmin();
     console.log("[seed] super_admin:", r?.seeded ? "created/updated" : "exists");
   } catch (e) {
@@ -631,15 +727,15 @@ async function startServer() {
   if (typeof paypalPaymentRoutes.probePayPalOAuthAndLog === "function") {
     await paypalPaymentRoutes.probePayPalOAuthAndLog();
   }
-  const server = app.listen(5050, "0.0.0.0", () => {
-    console.log("Server running on port 5050");
+  const server = app.listen(PORT, "0.0.0.0", () => {
+    console.log("🚀 Backend running on port:", PORT);
   });
 
   server.on("error", (err) => {
     if (err.code === "EADDRINUSE") {
       console.error(
-        "\nPort 5050 is already in use. Stop the other process first, e.g.:\n" +
-          "  lsof -ti :5050 | xargs kill -9\n" +
+        `\nPort ${PORT} is already in use. Stop the other process first, e.g.:\n` +
+          `  lsof -ti :${PORT} | xargs kill -9\n` +
           "Or: pkill -f \"node server.js\"\n"
       );
       process.exit(1);

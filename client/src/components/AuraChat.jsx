@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { fetchWithTimeout, apiUrl } from "../lib/api.js";
-import { applyAuraNavigateBookPrefill } from "../lib/auraBookingPrefill.js";
+import { useAuraContactPhone } from "../lib/useAuraContactPhone.js";
+import { applyAuraNavigateBookPrefill, AURA_STYLE_SESSION_KEY } from "../lib/auraBookingPrefill.js";
 import { formatNanpUsDisplay, nanpDialString } from "../lib/formatNanp.js";
 import "../styles/auraButton.css";
 
@@ -19,6 +20,19 @@ function speakAuraReply(reply) {
     window.speechSynthesis.speak(speech);
   } catch {
     /* ignore unsupported / blocked TTS */
+  }
+}
+
+function readAuraChatBarberId() {
+  if (typeof window === "undefined") return undefined;
+  try {
+    const raw = window.sessionStorage.getItem(AURA_STYLE_SESSION_KEY);
+    if (!raw) return undefined;
+    const j = JSON.parse(raw);
+    const n = Number(j?.barberId);
+    return Number.isFinite(n) && n > 0 ? n : undefined;
+  } catch {
+    return undefined;
   }
 }
 
@@ -41,7 +55,7 @@ export default function AuraChat({
   const routerNavigate = useNavigate();
   const navigate = navigateProp ?? routerNavigate ?? hashNavigate;
 
-  const auraPhoneRaw = String(import.meta.env.VITE_AURA_PHONE_NUMBER || "").trim();
+  const auraPhoneRaw = useAuraContactPhone();
   const auraPhoneTel = nanpDialString(auraPhoneRaw);
   const auraPhoneDisplay = formatNanpUsDisplay(auraPhoneRaw);
 
@@ -77,6 +91,7 @@ export default function AuraChat({
       ]);
       const messages = [...prior, { role: "user", content: trimmed }];
 
+      const barberId = readAuraChatBarberId();
       const res = await fetchWithTimeout(AURA_CHAT_URL, {
         method: "POST",
         headers: {
@@ -85,14 +100,13 @@ export default function AuraChat({
         body: JSON.stringify({
           message: trimmed,
           messages,
+          ...(barberId != null ? { barberId } : {}),
         }),
       });
       const data = await res.json().catch(() => ({}));
       const failMsg = "I'm having trouble right now, try again.";
-      const bot =
-        res.ok && data.reply != null && String(data.reply).trim()
-          ? String(data.reply)
-          : String(data.reply || "").trim() || failMsg;
+      const fromServer = String(data.reply || "").trim();
+      const bot = fromServer || failMsg;
       const action = String(data.action || "NONE").trim().toUpperCase();
       if (typeof navigate === "function") {
         if (action === "NAVIGATE_BOOK") {

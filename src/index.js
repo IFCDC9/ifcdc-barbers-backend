@@ -1,6 +1,6 @@
+import "../loadBackendEnv.mjs"
 import express from "express"
 import cors from "cors"
-import dotenv from "dotenv"
 import db from "./db/db.js"
 
 import tipsRoutes from "./routes/tipsRoutes.js"
@@ -11,8 +11,6 @@ import barberStatusRoutes from "./routes/barberStatusRoutes.js"
 import dashboardRoutes from "./routes/dashboardRoutes.js"
 import checkinRoutes from "./routes/checkinRoutes.js"
 import barberMediaRoutes from "./routes/barberMediaRoutes.js"
-
-dotenv.config()
 
 const app = express()
 

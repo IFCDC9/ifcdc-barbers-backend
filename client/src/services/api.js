@@ -233,6 +233,33 @@ export async function fetchBarberPublicPricing(barberId) {
 }
 
 /**
+ * Server-authoritative booking charge (style + platform fee + tip). POST public JSON.
+ * @param {number} barberId
+ * @param {{ styleId: string, paymentType?: string, tipPercent?: number, tipAmount?: number }} body
+ */
+export async function fetchBookingQuote(barberId, body) {
+  const id = Number(barberId);
+  if (!Number.isFinite(id) || id <= 0) return null;
+  const base = getApiBase();
+  assertResolvableApiBase(base);
+  const url = `${base}/api/barber/public/${id}/booking-quote`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify(body || {}),
+  });
+  const text = await res.text();
+  let data = {};
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    return null;
+  }
+  if (!res.ok) throw new Error(data?.message || data?.error || `Quote failed (HTTP ${res.status})`);
+  return data;
+}
+
+/**
  * JWT first; otherwise `x-admin-key` from localStorage or `VITE_ADMIN_API_KEY` / dev default (must match server `ADMIN_SECRET`).
  */
 function getJwtOrAdminKeyHeaders() {

@@ -1,5 +1,11 @@
-import "dotenv/config"
+import dotenv from "dotenv"
+import path from "node:path"
+import { fileURLToPath } from "node:url"
 import pg from "pg"
+
+const __dir = path.dirname(fileURLToPath(import.meta.url))
+const repoRoot = path.resolve(__dir, "../..")
+dotenv.config({ path: path.resolve(repoRoot, "backend", ".env") })
 
 const { Pool } = pg
 const pool = new Pool({
@@ -139,6 +145,18 @@ const migrations = [
     sql: `
       ALTER TABLE appointments
       ADD COLUMN IF NOT EXISTS service TEXT;
+    `,
+  },
+  {
+    name: "add appointments pricing and payout columns",
+    sql: `
+      ALTER TABLE appointments
+        ADD COLUMN IF NOT EXISTS service_price NUMERIC(10,2),
+        ADD COLUMN IF NOT EXISTS platform_fee NUMERIC(10,2) DEFAULT 0.99,
+        ADD COLUMN IF NOT EXISTS barber_payout NUMERIC(10,2),
+        ADD COLUMN IF NOT EXISTS payout_status VARCHAR(50) DEFAULT 'unpaid';
+      ALTER TABLE appointments ADD COLUMN IF NOT EXISTS payment_status VARCHAR(50) DEFAULT 'pending';
+      ALTER TABLE appointments ALTER COLUMN payment_status SET DEFAULT 'pending';
     `,
   },
 ]

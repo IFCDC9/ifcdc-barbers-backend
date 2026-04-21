@@ -5,7 +5,17 @@ import { fileURLToPath } from "node:url";
 import fs from "node:fs";
 import { dbQuery } from "./db.js";
 import { requireAuth } from "./authRoutes.js";
-import { resolveScopedBarberId, buildPublicBarberPricingResponse } from "./barberScope.js";
+import {
+  resolveScopedBarberId,
+  buildPublicBarberPricingResponse,
+  loadBarberSettingsRow,
+} from "./barberScope.js";
+import {
+  normalizeBillingProvider,
+  normalizeTier,
+  TIER_FREE,
+  validateSubscriptionMonthlyPrice,
+} from "./subscriptionTier.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -57,6 +67,38 @@ export function createBarberBusinessRouter({ uploadDir } = {}) {
     }
   });
 
+  /** Public: authoritative charge breakdown (service + platform fee + tip) for PayPal + UI. */
+  router.post("/api/barber/public/:id/booking-quote", async (req, res) => {
+    const bid = num(req.params.id, NaN);
+    if (!Number.isFinite(bid)) {
+      return res.status(400).json({ error: "invalid_barber_id", message: "Invalid barber id" });
+    }
+    try {
+      const exists = await dbQuery(`SELECT id FROM barbers WHERE id = $1 LIMIT 1`, [bid]);
+      if (!exists.rows?.length) {
+        return res.status(404).json({ error: "not_found", message: "Barber not found" });
+      }
+      const { computeStyleBookingBreakdown } = await import("./bookingBreakdown.js");
+      const body = req.body && typeof req.body === "object" ? req.body : {};
+      const styleId = String(body.styleId || body.style_id || "").trim();
+      const paymentType = body.paymentType || body.payment_type || "full";
+      const out = await computeStyleBookingBreakdown({ styleId, barberId: bid, paymentType, body });
+      if (!out.ok) {
+        return res.status(out.status || 400).json({ error: out.error, message: out.message });
+      }
+      return res.json({
+        ok: true,
+        subscription_tier: out.subscription_tier,
+        breakdown: out.breakdown,
+        styleId: out.styleId,
+        styleTitle: out.styleTitle,
+      });
+    } catch (e) {
+      console.error("[barber-business] booking-quote:", e);
+      return res.status(500).json({ error: "server_error", message: "Failed to compute quote" });
+    }
+  });
+
   const baseDir = uploadDir || path.join(__dirname, "backend", "uploads");
   if (!fs.existsSync(baseDir)) fs.mkdirSync(baseDir, { recursive: true });
 
@@ -69,7 +111,62 @@ export function createBarberBusinessRouter({ uploadDir } = {}) {
   });
   const upload = multer({ storage, limits: { fileSize: 8 * 1024 * 1024 } });
 
+  const BRANDING_MAX_BYTES = 5 * 1024 * 1024;
+  const brandingImageMime = /^image\/(jpeg|pjpeg|png|gif|webp|avif)$/i;
+  function brandingFileFilter(_req, file, cb) {
+    if (!file.mimetype || !brandingImageMime.test(file.mimetype)) {
+      return cb(new Error("Only JPEG, PNG, GIF, WebP, or AVIF images are allowed"));
+    }
+    cb(null, true);
+  }
+
+  const uploadBranding = multer({
+    storage: multer.diskStorage({
+      destination: (_req, _file, cb) => cb(null, baseDir),
+      filename: (_req, file, cb) => {
+        const ext = path.extname(file.originalname || "").slice(0, 12).toLowerCase();
+        const safe =
+          ext === ".jpg" || ext === ".jpeg" || ext === ".png" || ext === ".gif" || ext === ".webp" || ext === ".avif"
+            ? ext
+            : ".jpg";
+        cb(null, `branding-${Date.now()}-${Math.random().toString(16).slice(2)}${safe}`);
+      },
+    }),
+    limits: { fileSize: BRANDING_MAX_BYTES },
+    fileFilter: brandingFileFilter,
+  });
+
+  function handleBrandingUpload(req, res, next) {
+    uploadBranding.single("file")(req, res, (err) => {
+      if (!err) return next();
+      if (err.code === "LIMIT_FILE_SIZE") {
+        return res.status(400).json({
+          error: "file_too_large",
+          message: "Image must be 5MB or smaller",
+        });
+      }
+      return res.status(400).json({
+        error: "invalid_file",
+        message: err.message || "Upload failed",
+      });
+    });
+  }
+
   const chain = [requireAuth, middlewareBarberScope];
+
+  /** POST /api/upload — barber-scoped; multipart field `file`; saves under /uploads, returns `{ url }`. */
+  router.post("/api/upload", ...chain, handleBrandingUpload, (req, res) => {
+    try {
+      if (!req.file?.filename) {
+        return res.status(400).json({ error: "file_required", message: "Multipart field `file` (image) is required" });
+      }
+      const url = `/uploads/${req.file.filename}`;
+      return res.status(201).json({ url });
+    } catch (e) {
+      console.error("[barber-business] POST /api/upload:", e);
+      return res.status(500).json({ error: "server_error", message: e?.message || String(e) });
+    }
+  });
 
   const registerProfile = (method, pathSuffix, ...handlers) => {
     router[method](pathSuffix, ...handlers);
@@ -291,13 +388,8 @@ export function createBarberBusinessRouter({ uploadDir } = {}) {
         `INSERT INTO barber_settings (barber_id) VALUES ($1) ON CONFLICT (barber_id) DO NOTHING`,
         [req.barberId],
       );
-      const r2 = await dbQuery(
-        `SELECT barber_id, theme_color, booking_deposit_enabled, deposit_amount::float8 AS deposit_amount,
-                payment_method, aura_enabled, aura_voice_type, language
-         FROM barber_settings WHERE barber_id = $1 LIMIT 1`,
-        [req.barberId],
-      );
-      return res.json({ settings: r2.rows?.[0] || null });
+      const st = await loadBarberSettingsRow(req.barberId);
+      return res.json({ settings: { barber_id: req.barberId, ...st } });
     } catch (e) {
       console.error("[barber-business] GET settings:", e);
       return res.status(500).json({ error: "server_error", message: "Failed to load settings" });
@@ -314,6 +406,8 @@ export function createBarberBusinessRouter({ uploadDir } = {}) {
         [bid],
       );
 
+      const existing = await loadBarberSettingsRow(bid);
+
       const theme_color = String(req.body?.theme_color ?? req.body?.themeColor ?? "").trim();
       const booking_deposit_enabled = req.body?.booking_deposit_enabled ?? req.body?.bookingDepositEnabled;
       const deposit_amount = req.body?.deposit_amount ?? req.body?.depositAmount;
@@ -321,6 +415,32 @@ export function createBarberBusinessRouter({ uploadDir } = {}) {
       const aura_enabled = req.body?.aura_enabled ?? req.body?.auraEnabled;
       const aura_voice_type = String(req.body?.aura_voice_type ?? req.body?.auraVoiceType ?? "").trim();
       const language = String(req.body?.language ?? "").trim();
+
+      const tierRaw = req.body?.subscription_tier ?? req.body?.subscriptionTier;
+      const tierUpdate =
+        tierRaw != null && String(tierRaw).trim() !== "" ? normalizeTier(String(tierRaw)) : null;
+      const nextTier = tierUpdate ?? existing.subscription_tier;
+
+      const subPriceRaw = req.body?.subscription_monthly_price ?? req.body?.subscriptionMonthlyPrice;
+      let priceSqlToken = "noop";
+      if (subPriceRaw === "" || tierUpdate === TIER_FREE) priceSqlToken = "clear";
+      else if (subPriceRaw != null && String(subPriceRaw).trim() !== "") priceSqlToken = String(money(subPriceRaw));
+
+      let nextMonthlyPrice = existing.subscription_monthly_price;
+      if (priceSqlToken === "clear") nextMonthlyPrice = null;
+      else if (priceSqlToken !== "noop") nextMonthlyPrice = money(priceSqlToken);
+      if (normalizeTier(nextTier) === TIER_FREE) nextMonthlyPrice = null;
+
+      const v = validateSubscriptionMonthlyPrice(nextTier, nextMonthlyPrice);
+      if (!v.ok) {
+        return res.status(400).json({ error: "validation", message: v.message || "Invalid subscription price" });
+      }
+
+      const billingProvRaw = req.body?.billing_provider ?? req.body?.billingProvider;
+      const billingSubIdRaw = req.body?.billing_subscription_id ?? req.body?.billingSubscriptionId;
+      let billingSubSql = "noop";
+      if (billingSubIdRaw === "") billingSubSql = "clear";
+      else if (billingSubIdRaw != null) billingSubSql = String(billingSubIdRaw).trim() || "clear";
 
       const r = await dbQuery(
         `UPDATE barber_settings SET
@@ -330,10 +450,20 @@ export function createBarberBusinessRouter({ uploadDir } = {}) {
            payment_method = CASE WHEN $5::text IS NULL OR $5::text = '' THEN payment_method ELSE $5::text END,
            aura_enabled = CASE WHEN $6::boolean IS NULL THEN aura_enabled ELSE $6::boolean END,
            aura_voice_type = CASE WHEN $7::text IS NULL OR $7::text = '' THEN aura_voice_type ELSE $7::text END,
-           language = CASE WHEN $8::text IS NULL OR $8::text = '' THEN language ELSE $8::text END
-         WHERE barber_id = $1
-         RETURNING barber_id, theme_color, booking_deposit_enabled, deposit_amount::float8 AS deposit_amount,
-                   payment_method, aura_enabled, aura_voice_type, language`,
+           language = CASE WHEN $8::text IS NULL OR $8::text = '' THEN language ELSE $8::text END,
+           subscription_tier = CASE WHEN $9::text IS NULL OR $9::text = '' THEN subscription_tier ELSE $9::text END,
+           subscription_monthly_price = CASE
+             WHEN $10::text = 'noop' THEN subscription_monthly_price
+             WHEN $10::text = 'clear' THEN NULL
+             ELSE $10::numeric
+           END,
+           billing_provider = CASE WHEN $11::text IS NULL OR $11::text = '' THEN billing_provider ELSE $11::text END,
+           billing_subscription_id = CASE
+             WHEN $12::text = 'noop' THEN billing_subscription_id
+             WHEN $12::text = 'clear' THEN NULL
+             ELSE $12::text
+           END
+         WHERE barber_id = $1`,
         [
           bid,
           theme_color || null,
@@ -343,9 +473,19 @@ export function createBarberBusinessRouter({ uploadDir } = {}) {
           aura_enabled == null ? null : Boolean(aura_enabled),
           aura_voice_type || null,
           language || null,
+          tierUpdate || null,
+          priceSqlToken,
+          billingProvRaw != null && String(billingProvRaw).trim() !== ""
+            ? normalizeBillingProvider(billingProvRaw)
+            : null,
+          billingSubSql,
         ],
       );
-      return res.json({ settings: r.rows?.[0] });
+      if (!r.rowCount) {
+        return res.status(404).json({ error: "not_found", message: "Barber settings not found" });
+      }
+      const st = await loadBarberSettingsRow(bid);
+      return res.json({ settings: { barber_id: bid, ...st } });
     } catch (e) {
       console.error("[barber-business] PUT settings:", e);
       return res.status(500).json({ error: "server_error", message: "Failed to save settings" });
@@ -358,7 +498,7 @@ export function createBarberBusinessRouter({ uploadDir } = {}) {
   const getClientsHandler = async (req, res) => {
     try {
       const r = await dbQuery(
-        `SELECT id, barber_id, name, phone, notes, created_at FROM barber_clients WHERE barber_id = $1 ORDER BY created_at DESC LIMIT 500`,
+        `SELECT id, barber_id, name, email, phone, notes, created_at FROM barber_clients WHERE barber_id = $1 ORDER BY created_at DESC LIMIT 500`,
         [req.barberId],
       );
       return res.json({ clients: r.rows || [] });
@@ -376,6 +516,7 @@ export function createBarberBusinessRouter({ uploadDir } = {}) {
       if (!name || name.length > 200) {
         return res.status(400).json({ error: "validation", message: "Client name is required" });
       }
+      const email = String(req.body?.email ?? "").trim() || null;
       const phone = String(req.body?.phone ?? "").trim() || null;
       const notes = String(req.body?.notes ?? "").trim() || null;
       if (notes && notes.length > 4000) {
@@ -383,9 +524,9 @@ export function createBarberBusinessRouter({ uploadDir } = {}) {
       }
 
       const ins = await dbQuery(
-        `INSERT INTO barber_clients (barber_id, name, phone, notes) VALUES ($1, $2, $3, $4)
-         RETURNING id, barber_id, name, phone, notes, created_at`,
-        [req.barberId, name, phone, notes],
+        `INSERT INTO barber_clients (barber_id, name, email, phone, notes) VALUES ($1, $2, $3, $4, $5)
+         RETURNING id, barber_id, name, email, phone, notes, created_at`,
+        [req.barberId, name, email, phone, notes],
       );
       return res.status(201).json({ client: ins.rows?.[0] });
     } catch (e) {
@@ -444,6 +585,74 @@ export function createBarberBusinessRouter({ uploadDir } = {}) {
     } catch (e) {
       console.error("[barber-business] DELETE media:", e);
       return res.status(500).json({ error: "server_error", message: "Failed to delete media" });
+    }
+  });
+
+  /** Ledger rows: mandatory per-booking platform fee (barber accrual). */
+  router.get("/api/barber/fees/:barberId", requireAuth, async (req, res) => {
+    try {
+      const resolved = await resolveScopedBarberId(req.user, req.params.barberId);
+      if (resolved.error) {
+        return res.status(resolved.status).json({ error: resolved.error, message: resolved.message });
+      }
+      const bid = resolved.barberId;
+      const r = await dbQuery(
+        `SELECT id, barber_id, booking_id, fee_amount::float8 AS fee_amount, fee_status, billed_at, paid_at, created_at
+         FROM barber_fee_ledger
+         WHERE barber_id = $1
+         ORDER BY id DESC
+         LIMIT 500`,
+        [bid],
+      );
+      return res.json({ ok: true, fees: r.rows || [] });
+    } catch (e) {
+      console.error("[barber-business] GET fees:", e);
+      return res.status(500).json({ error: "server_error", message: e?.message || String(e) });
+    }
+  });
+
+  /** Aggregates for barber dashboard (fees are internal; not shown to end customers on public booking). */
+  router.get("/api/barber/billing-summary/:barberId", requireAuth, async (req, res) => {
+    try {
+      const resolved = await resolveScopedBarberId(req.user, req.params.barberId);
+      if (resolved.error) {
+        return res.status(resolved.status).json({ error: resolved.error, message: resolved.message });
+      }
+      const bid = resolved.barberId;
+      const [cnt, svc, acc, st] = await Promise.all([
+        dbQuery(`SELECT COUNT(*)::int AS n FROM bookings WHERE barber_id = $1`, [bid]),
+        dbQuery(`SELECT COALESCE(SUM(total_price), 0)::float8 AS s FROM bookings WHERE barber_id = $1`, [bid]),
+        dbQuery(
+          `SELECT COALESCE(SUM(fee_amount), 0)::float8 AS s FROM barber_fee_ledger WHERE barber_id = $1 AND fee_status IN ('accrued','pending')`,
+          [bid],
+        ),
+        loadBarberSettingsRow(bid),
+      ]);
+      const totalBookings = Number(cnt.rows?.[0]?.n) || 0;
+      const serviceTotalUsd = money(Number(svc.rows?.[0]?.s) || 0);
+      const accruedPlatformFeesUsd = money(Number(acc.rows?.[0]?.s) || 0);
+      const platformFeeUsd = 0.99;
+      const netBarberEstimateUsd = money(Math.max(0, serviceTotalUsd - accruedPlatformFeesUsd));
+      return res.json({
+        ok: true,
+        barberId: bid,
+        totalBookings,
+        serviceTotalUsd,
+        platformFeeUsd,
+        accruedPlatformFeesUsd,
+        netBarberEarningsEstimateUsd: netBarberEstimateUsd,
+        isPro: Boolean(st?.is_pro),
+        proPurchaseStatus: String(st?.pro_purchase_status || "not_purchased"),
+        proPurchasedAt: st?.pro_purchased_at || null,
+        exampleForServiceUsd30: {
+          serviceTotal: 30,
+          platformFee: platformFeeUsd,
+          netBarberEarnings: money(30 - platformFeeUsd),
+        },
+      });
+    } catch (e) {
+      console.error("[barber-business] GET billing-summary:", e);
+      return res.status(500).json({ error: "server_error", message: e?.message || String(e) });
     }
   });
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Loads the same .env order as server.js (root .env, then backend/.env override),
+ * Loads the same env file as server.js (`backend/.env` only),
  * then POSTs to PayPal OAuth2. Use to confirm PAYPAL_CLIENT_ID + Secret are a valid pair.
  *
  *   npm run test:paypal
@@ -9,8 +9,7 @@ const path = require("path");
 const dotenv = require("dotenv");
 
 const root = path.join(__dirname, "..");
-dotenv.config({ path: path.join(root, ".env") });
-dotenv.config({ path: path.join(root, "backend", ".env"), override: true });
+dotenv.config({ path: path.join(root, "backend", ".env") });
 
 function norm(v) {
   if (v == null) return "";
