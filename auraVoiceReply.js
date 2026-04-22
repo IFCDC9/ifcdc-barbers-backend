@@ -382,7 +382,8 @@ export function createSimpleAuraVoiceHandlers(opts = {}) {
     });
     console.log("📞 Incoming call:", req.body);
 
-    if (String(process.env.AURA_VOICE_DIAGNOSTIC || "").trim() === "1") {
+    const env = typeof process !== "undefined" && process?.env && typeof process.env === "object" ? process.env : {};
+    if (String(env.AURA_VOICE_DIAGNOSTIC || "").trim() === "1") {
       const twiml = new twilio.twiml.VoiceResponse();
       twiml.say("AURA is connected.");
       res.type("text/xml");

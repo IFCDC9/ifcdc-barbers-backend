@@ -58,7 +58,7 @@ if (!rawPublic) {
 }
 
 /** Voice Twilio callbacks — single public origin (no trailing slash). */
-const BASE_URL = rawPublic.replace(/\/$/, "");
+const BASE_URL = stripOuterQuotes(process.env.PUBLIC_API_URL).replace(/\/$/, "");
 process.env.PUBLIC_API_URL = BASE_URL;
 console.log("✅ AURA BASE URL:", BASE_URL);
 
@@ -75,7 +75,10 @@ process.on("unhandledRejection", (reason) => {
   console.error("UNHANDLED REJECTION:", reason);
 });
 
-const PORT = parseInt(String(process.env.PORT || "5050"), 10) || 5050;
+const PORT = process.env.PORT || 10000;
+
+console.log("🚀 Server running on port:", PORT);
+console.log("🌐 PUBLIC API URL:", process.env.PUBLIC_API_URL);
 
 const AURA_NUMBER = process.env.AURA_PHONE_NUMBER;
 const BUSINESS_PHONE = process.env.BUSINESS_PHONE || "+13313168167";

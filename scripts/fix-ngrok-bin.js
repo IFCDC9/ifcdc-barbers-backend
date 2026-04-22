@@ -9,6 +9,11 @@ import fs from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 
+// Never run local ngrok repair logic in production deploys.
+if (String(process.env.NODE_ENV || "").trim() === "production") {
+  process.exit(0)
+}
+
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..")
 
 function chmodIfExists(filePath) {

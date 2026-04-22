@@ -1,3 +1,20 @@
 {
-  "ignore": ["client/**", "node_modules/**", "mobile/**", "uploads/**", "**/*.test.js"]
+  "watch": [
+    "*.js",
+    "*.mjs",
+    "*.cjs",
+    "*.json",
+    "src/**/*.js",
+    "src/**/*.mjs",
+    "src/**/*.cjs",
+    "src/**/*.json"
+  ],
+  "ignore": [
+    "client/**",
+    "backend/**",
+    "node_modules/**",
+    "mobile/**",
+    "uploads/**",
+    "**/*.test.js"
+  ]
 }

@@ -1,5 +1,7 @@
 /**
- * Single source of truth: `backend/.env` next to this repo root (never cwd-relative).
+ * Loads environment for local dev.
+ * - First: repo-root `.env` (if present)
+ * - Then: `backend/.env` (legacy local layout) without overriding existing values
  * Import this as the first side effect from `server.js` (or `src/server.js` / `src/index.js`).
  *
  * If `TWILIO_MESSAGING_SERVICE_SID` is empty but Account SID + Auth Token are set,
@@ -8,13 +10,13 @@
 import dotenv from "dotenv";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import twilio from "twilio";
-
 const repoRoot = path.dirname(fileURLToPath(import.meta.url));
-const envPath = path.resolve(repoRoot, "backend", ".env");
-dotenv.config({ path: envPath });
+const rootEnvPath = path.resolve(repoRoot, ".env");
+const backendEnvPath = path.resolve(repoRoot, "backend", ".env");
+dotenv.config({ path: rootEnvPath });
+dotenv.config({ path: backendEnvPath, override: false });
 
-console.log("🔥 ENV PATH:", envPath);
+console.log("🔥 ENV PATH:", rootEnvPath, "|", backendEnvPath);
 
 let sid = (process.env.TWILIO_MESSAGING_SERVICE_SID || "").trim();
 
