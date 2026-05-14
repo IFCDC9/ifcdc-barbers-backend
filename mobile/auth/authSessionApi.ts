@@ -4,6 +4,13 @@ export type JsonAuth = {
   ok?: boolean;
   success?: boolean;
   token?: string;
+  user?: {
+    email?: string;
+    role?: string;
+    isOwner?: boolean;
+    isSuperAdmin?: boolean;
+  };
+  redirect?: string;
   error?: string;
   message?: string;
   detail?: string;
@@ -106,8 +113,13 @@ export async function loginWithEmailPassword(email: string, password: string) {
   throw new Error(mapAuthErrorToMessage(json, status));
 }
 
-export async function registerWithEmailPassword(name: string, email: string, password: string) {
-  const { json, status } = await postAuthJson("/api/auth/register", { name, email, password });
+export async function registerWithEmailPassword(
+  name: string,
+  email: string,
+  password: string,
+  accountType: "customer" | "barber" = "customer",
+) {
+  const { json, status } = await postAuthJson("/api/auth/register", { name, email, password, accountType });
   if (loginResponseSucceeded(status, json)) {
     return { token: String(json.token).trim(), json };
   }

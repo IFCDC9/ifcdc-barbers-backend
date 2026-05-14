@@ -9,6 +9,7 @@ import { addNotificationListeners } from "./services/notificationService";
 import AIFloatingButton from "./components/AIFloatingButton";
 import AIAssistantSheet from "./components/AIAssistantSheet";
 import { AuthProvider, useAuth } from "./services/authContext";
+import AdminDashboardScreen from "./screens/AdminDashboardScreen";
 import LoginScreen from "./screens/LoginScreen";
 import RegisterScreen from "./screens/RegisterScreen";
 
@@ -22,7 +23,7 @@ LogBox.ignoreLogs([
 const Stack = createStackNavigator();
 
 function RootNav() {
-  const { loading, token } = useAuth();
+  const { loading, token, sessionKind } = useAuth();
   const [aiOpen, setAiOpen] = React.useState(false);
 
   React.useEffect(() => {
@@ -44,9 +45,17 @@ function RootNav() {
   return (
     <View style={{ flex: 1 }}>
       <NavigationContainer>
-        <Stack.Navigator screenOptions={{ headerShown: false }}>
+        <Stack.Navigator
+          screenOptions={{ headerShown: false }}
+          initialRouteName={token && sessionKind === "owner" ? "Admin" : token ? "App" : "Login"}
+        >
           {token ? (
-            <Stack.Screen name="App" component={Tabs} />
+            <>
+              {sessionKind === "owner" ? (
+                <Stack.Screen name="Admin" component={AdminDashboardScreen} />
+              ) : null}
+              <Stack.Screen name="App" component={Tabs} />
+            </>
           ) : (
             <>
               <Stack.Screen name="Login" component={LoginScreen} />

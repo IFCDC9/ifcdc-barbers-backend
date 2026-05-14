@@ -6,6 +6,9 @@ export type GoogleAuthUser = {
   email?: string;
   google_id?: string | null;
   avatar?: string | null;
+  role?: string;
+  isOwner?: boolean;
+  isSuperAdmin?: boolean;
 };
 
 type GoogleAuthJson = {
@@ -15,6 +18,7 @@ type GoogleAuthJson = {
   token?: string;
   accessToken?: string;
   user?: GoogleAuthUser;
+  redirect?: string;
   error?: string;
   detail?: string;
 };
@@ -22,6 +26,7 @@ type GoogleAuthJson = {
 export type GoogleExchangeResult = {
   token?: string;
   user?: GoogleAuthUser;
+  redirect?: string;
 };
 
 /**
@@ -72,5 +77,5 @@ export async function exchangeGoogleIdToken(
     (t) => typeof t === "string" && t.trim().length > 0
   )?.trim();
 
-  return { token, user: json.user };
+  return { token, user: json.user, redirect: json.redirect };
 }

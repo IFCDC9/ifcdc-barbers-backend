@@ -25,6 +25,7 @@ export default function RegisterScreen({ navigation }: { navigation: any }) {
   const [fullName, setFullName] = React.useState("");
   const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
+  const [accountType, setAccountType] = React.useState<"customer" | "barber">("customer");
   const [busy, setBusy] = React.useState(false);
 
   const googleAuthConfig = React.useMemo(() => getGoogleIdTokenAuthConfig(), []);
@@ -85,6 +86,12 @@ export default function RegisterScreen({ navigation }: { navigation: any }) {
 
           if (responseData.token) {
             try {
+              const u = responseData.user;
+              console.log("[auth] client_google_register", {
+                email: u?.email,
+                role: u?.role,
+                redirect: responseData.redirect,
+              });
               await signInWithToken(responseData.token);
             } catch (saveErr) {
               Alert.alert(
@@ -140,7 +147,18 @@ export default function RegisterScreen({ navigation }: { navigation: any }) {
   const register = async () => {
     try {
       setBusy(true);
-      const { token } = await registerWithEmailPassword(fullName.trim(), email.trim(), password);
+      const { token, json } = await registerWithEmailPassword(
+        fullName.trim(),
+        email.trim(),
+        password,
+        accountType,
+      );
+      const u = json?.user;
+      console.log("[auth] client_register", {
+        email: u?.email,
+        role: u?.role,
+        redirect: json?.redirect,
+      });
       try {
         await signInWithToken(token);
       } catch (saveErr) {
@@ -194,6 +212,28 @@ export default function RegisterScreen({ navigation }: { navigation: any }) {
           editable={!busy}
         />
         <View style={{ height: 10 }} />
+        <Text style={styles.helper}>Account type</Text>
+        <View style={{ height: 8 }} />
+        <View style={styles.roleRow}>
+          <View style={{ flex: 1 }}>
+            <GlowButton
+              label="Customer"
+              onPress={() => setAccountType("customer")}
+              variant={accountType === "customer" ? "primary" : "outline"}
+              disabled={busy}
+            />
+          </View>
+          <View style={{ width: 10 }} />
+          <View style={{ flex: 1 }}>
+            <GlowButton
+              label="Barber"
+              onPress={() => setAccountType("barber")}
+              variant={accountType === "barber" ? "primary" : "outline"}
+              disabled={busy}
+            />
+          </View>
+        </View>
+        <View style={{ height: 10 }} />
         <TextInput
           value={email}
           onChangeText={setEmail}
@@ -237,6 +277,7 @@ const styles = StyleSheet.create({
   title: { color: theme.colors.text, fontWeight: "900", fontSize: 26, marginBottom: 8 },
   helper: { color: theme.colors.textMuted, textAlign: "center", fontSize: 12 },
   or: { color: theme.colors.textMuted, textAlign: "center", fontWeight: "700" },
+  roleRow: { flexDirection: "row", width: "100%", justifyContent: "center", alignItems: "stretch" },
   input: {
     backgroundColor: "rgba(255,255,255,0.04)",
     borderWidth: 1,

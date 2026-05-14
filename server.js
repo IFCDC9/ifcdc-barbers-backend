@@ -757,9 +757,9 @@ async function startServer() {
   }
   try {
     const r = await ensureInitialSuperAdmin();
-    console.log("[seed] super_admin:", r?.seeded ? "created/updated" : "exists");
+    console.log("[seed] platform_owner:", r?.seeded ? "created/updated" : r?.reason || "ok");
   } catch (e) {
-    console.error("[seed] super_admin failed:", e?.message || e);
+    console.error("[seed] platform_owner failed:", e?.message || e);
   }
 
   await verifyResendApiKey();

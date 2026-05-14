@@ -5,21 +5,20 @@ import {
   clearResetTokenForUserId,
   getUserByResetTokenHash,
   normalizeEmail,
-  safeUserPublic,
   setResetTokenForEmail,
   sha256Hex,
+  updatePasswordForUserId,
 } from "./authStore.js";
 import { dbQuery } from "./db.js";
-import { ALLOWED_ROLES } from "./authDbMigrations.js";
 import { comparePassword, hashPassword, validatePasswordStrength } from "./authPasswordPolicy.js";
+import { jwtClaimsFromAppUser, publicUserFromAppUser } from "./authPlatformJwt.js";
+import { CANONICAL_SUPER_ADMIN_EMAIL, isSuperAdminEmail, resolveRoleFromTrustedSource } from "./rolePolicy.js";
 
 const require = createRequire(import.meta.url);
 const jwt = require("jsonwebtoken");
 
-/** Temporary forced admin (JWT login bypass for stability). Restore bcrypt + DB checks later. */
-export const ADMIN_EMAIL = "service@ifcdc.org";
-export const ADMIN_PASSWORD = "admin123";
-const DEV_ADMIN_BEARER_TOKEN = "dev-admin-token";
+/** @deprecated Use CANONICAL_SUPER_ADMIN_EMAIL from rolePolicy.js */
+export const ADMIN_EMAIL = CANONICAL_SUPER_ADMIN_EMAIL;
 
 function getJwtSecret() {
   const s = String(process.env.AUTH_JWT_SECRET || process.env.JWT_SECRET || "").trim();
@@ -29,27 +28,33 @@ function getJwtSecret() {
   return "dev-insecure-secret-change-me";
 }
 
-function signToken({ id, email, role }) {
+function signTokenForAppUser(userRow) {
+  const claims = jwtClaimsFromAppUser(userRow);
   const secret = getJwtSecret();
-  return jwt.sign({ id, email, role }, secret, { expiresIn: "7d" });
+  return jwt.sign(claims, secret, { expiresIn: "7d" });
+}
+
+function postLoginRedirectFromClaims(claims) {
+  if (claims?.isOwner === true && claims?.isSuperAdmin === true) return "admin_dashboard";
+  return "app";
 }
 
 /**
- * Validates Bearer token: real JWT or temporary dev-admin literal (must match login bypass).
+ * Validates Bearer JWT (HS256). Legacy tokens without isSuperAdmin are normalized when role is super_admin.
  */
 export function resolveAuthPayload(token) {
   const t = String(token || "").trim();
   if (!t) return null;
-  if (t === DEV_ADMIN_BEARER_TOKEN) {
-    return {
-      id: "00000000-0000-4000-8000-000000000099",
-      email: ADMIN_EMAIL,
-      role: "admin",
-    };
-  }
   try {
     const secret = getJwtSecret();
-    return jwt.verify(t, secret);
+    const p = jwt.verify(t, secret);
+    if (p && typeof p === "object") {
+      const role = String(p.role || "").trim().toLowerCase();
+      if (p.isSuperAdmin == null && role === "super_admin") {
+        p.isSuperAdmin = true;
+      }
+    }
+    return p;
   } catch {
     return null;
   }
@@ -82,6 +87,7 @@ export function requireAuthOrAdminSecret(req, res, next) {
       id: "00000000-0000-4000-8000-000000000001",
       email: "admin@api-key",
       role: "super_admin",
+      isSuperAdmin: true,
     };
     return next();
   }
@@ -92,10 +98,13 @@ export function requireRole(roles) {
   const allowed = Array.isArray(roles) ? roles : [roles];
   return (req, res, next) => {
     const r = String(req.user?.role || "").trim();
-    if (!allowed.includes(r)) {
-      return res.status(403).json({ message: "Access denied" });
+    if (allowed.includes(r)) {
+      return next();
     }
-    return next();
+    if (req.user?.isSuperAdmin === true && (allowed.includes("super_admin") || allowed.includes("admin"))) {
+      return next();
+    }
+    return res.status(403).json({ message: "Access denied" });
   };
 }
 
@@ -131,23 +140,30 @@ export function createAuthRouter({ sendEmail }) {
       const name = String(req.body?.name || "").trim();
       const email = normalizeEmail(req.body?.email);
       const password = String(req.body?.password || "");
-      const roleRaw = String(req.body?.role || "user").trim().toLowerCase();
-      const role = ALLOWED_ROLES.includes(roleRaw) ? roleRaw : "user";
+      const wireRole = String(req.body?.role || "").trim().toLowerCase();
+      if (wireRole === "admin" || wireRole === "super_admin") {
+        return res.status(403).json({
+          error: "forbidden_role",
+          message: "Admin accounts cannot be created through registration.",
+        });
+      }
+      if (isSuperAdminEmail(email)) {
+        return res.status(403).json({
+          error: "email_reserved",
+          message: "This email is reserved for the platform owner account.",
+        });
+      }
+
+      const role = resolveRoleFromTrustedSource(req);
+      if (role !== "user" && role !== "barber") {
+        return res.status(400).json({ error: "invalid_role", message: "Account type must be customer or barber." });
+      }
 
       if (!name) return res.status(400).json({ error: "name_required", message: "Name is required" });
       if (!email) return res.status(400).json({ error: "email_required", message: "Email is required" });
       const pwCheck = validatePasswordStrength(password);
       if (!pwCheck.valid) {
         return res.status(400).json({ error: "weak_password", message: pwCheck.message });
-      }
-
-      if (role === "super_admin") {
-        const existingSa = await dbQuery(
-          "SELECT id FROM app_users WHERE role = 'super_admin' LIMIT 1"
-        );
-        if ((existingSa.rows || []).length > 0) {
-          return res.status(403).json({ error: "super_admin_exists", message: "Super admin already exists" });
-        }
       }
 
       const passwordHash = await hashPassword(password);
@@ -158,9 +174,22 @@ export function createAuthRouter({ sendEmail }) {
         [name || null, email, passwordHash, role]
       );
       const user = created.rows?.[0];
-      const token = signToken({ id: user.id, email: user.email, role: user.role });
+      const claims = jwtClaimsFromAppUser(user);
+      const token = signTokenForAppUser(user);
+      const publicUser = publicUserFromAppUser(user);
+      console.log("[auth] register_success", {
+        email: publicUser.email,
+        role: publicUser.role,
+        redirect: postLoginRedirectFromClaims(claims),
+      });
 
-      return res.json({ ok: true, success: true, token, user: safeUserPublic(user) });
+      return res.json({
+        ok: true,
+        success: true,
+        token,
+        user: publicUser,
+        redirect: postLoginRedirectFromClaims(claims),
+      });
     } catch (e) {
       if (String(e?.message || "").toLowerCase().includes("duplicate") || e?.code === "23505") {
         return res.status(409).json({ error: "email_exists", message: "Email is already registered" });
@@ -172,21 +201,8 @@ export function createAuthRouter({ sendEmail }) {
 
   router.post("/login", async (req, res) => {
     try {
-      const emailIn = normalizeEmail(req.body?.email);
+      const email = normalizeEmail(req.body?.email);
       const password = String(req.body?.password || "");
-      if (emailIn === ADMIN_EMAIL && password === ADMIN_PASSWORD) {
-        return res.json({
-          ok: true,
-          success: true,
-          user: {
-            email: ADMIN_EMAIL,
-            role: "admin",
-          },
-          token: DEV_ADMIN_BEARER_TOKEN,
-        });
-      }
-
-      const email = emailIn;
       if (!email || !password) {
         return res.status(400).json({ error: "missing_credentials", message: "Email and password required" });
       }
@@ -213,8 +229,24 @@ export function createAuthRouter({ sendEmail }) {
         });
       }
 
-      const token = signToken({ id: user.id, email: user.email, role: user.role });
-      return res.json({ ok: true, success: true, token, user: safeUserPublic(user) });
+      const claims = jwtClaimsFromAppUser(user);
+      const token = signTokenForAppUser(user);
+      const publicUser = publicUserFromAppUser(user);
+      const redirect = postLoginRedirectFromClaims(claims);
+      console.log("[auth] login_success", {
+        email: publicUser.email,
+        role: publicUser.role,
+        isOwner: publicUser.isOwner,
+        isSuperAdmin: publicUser.isSuperAdmin,
+        redirect,
+      });
+      return res.json({
+        ok: true,
+        success: true,
+        token,
+        user: publicUser,
+        redirect,
+      });
     } catch (e) {
       console.error("[auth] login error:", e);
       return res.status(500).json({ ok: false, success: false, error: "server_error", message: "Login failed" });
@@ -311,12 +343,21 @@ export function createAuthRouter({ sendEmail }) {
       );
       const userByGoogle = byGoogle.rows?.[0] || null;
       if (userByGoogle) {
-        const token = signToken({
-          id: userByGoogle.id,
-          email: userByGoogle.email,
-          role: userByGoogle.role,
+        const claims = jwtClaimsFromAppUser(userByGoogle);
+        const token = signTokenForAppUser(userByGoogle);
+        const publicUser = publicUserFromAppUser(userByGoogle);
+        console.log("[auth] google_success", {
+          email: publicUser.email,
+          role: publicUser.role,
+          redirect: postLoginRedirectFromClaims(claims),
         });
-        return res.json({ ok: true, success: true, token, user: safeUserPublic(userByGoogle) });
+        return res.json({
+          ok: true,
+          success: true,
+          token,
+          user: publicUser,
+          redirect: postLoginRedirectFromClaims(claims),
+        });
       }
 
       const byEmail = await dbQuery(
@@ -335,8 +376,21 @@ export function createAuthRouter({ sendEmail }) {
         }
         await dbQuery("UPDATE app_users SET google_id = $1 WHERE id = $2::uuid", [googleId, userByEmail.id]);
         const refreshed = { ...userByEmail, google_id: googleId };
-        const token = signToken({ id: refreshed.id, email: refreshed.email, role: refreshed.role });
-        return res.json({ ok: true, success: true, token, user: safeUserPublic(refreshed) });
+        const claims = jwtClaimsFromAppUser(refreshed);
+        const token = signTokenForAppUser(refreshed);
+        const publicUser = publicUserFromAppUser(refreshed);
+        console.log("[auth] google_success", {
+          email: publicUser.email,
+          role: publicUser.role,
+          redirect: postLoginRedirectFromClaims(claims),
+        });
+        return res.json({
+          ok: true,
+          success: true,
+          token,
+          user: publicUser,
+          redirect: postLoginRedirectFromClaims(claims),
+        });
       }
 
       const pw = randomPlaceholderPasswordForOAuth();
@@ -356,8 +410,21 @@ export function createAuthRouter({ sendEmail }) {
           message: "Could not create your account. Try again.",
         });
       }
-      const token = signToken({ id: nu.id, email: nu.email, role: nu.role });
-      return res.json({ ok: true, success: true, token, user: safeUserPublic(nu) });
+      const claims = jwtClaimsFromAppUser(nu);
+      const token = signTokenForAppUser(nu);
+      const publicUser = publicUserFromAppUser(nu);
+      console.log("[auth] google_success", {
+        email: publicUser.email,
+        role: publicUser.role,
+        redirect: postLoginRedirectFromClaims(claims),
+      });
+      return res.json({
+        ok: true,
+        success: true,
+        token,
+        user: publicUser,
+        redirect: postLoginRedirectFromClaims(claims),
+      });
     } catch (e) {
       console.error("[auth/google] error:", e?.stack || e);
       return res.status(500).json({

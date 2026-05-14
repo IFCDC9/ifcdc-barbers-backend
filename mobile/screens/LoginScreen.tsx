@@ -89,6 +89,12 @@ export default function LoginScreen({ navigation }: { navigation: any }) {
 
           if (responseData.token) {
             try {
+              const u = responseData.user;
+              console.log("[auth] client_google_login", {
+                email: u?.email,
+                role: u?.role,
+                redirect: responseData.redirect,
+              });
               await signInWithToken(responseData.token);
             } catch (saveErr) {
               Alert.alert(
@@ -146,7 +152,15 @@ export default function LoginScreen({ navigation }: { navigation: any }) {
   const login = async () => {
     try {
       setBusy(true);
-      const { token } = await loginWithEmailPassword(email.trim(), password);
+      const { token, json } = await loginWithEmailPassword(email.trim(), password);
+      const u = json?.user;
+      console.log("[auth] client_login", {
+        email: u?.email,
+        role: u?.role,
+        isOwner: u?.isOwner,
+        isSuperAdmin: u?.isSuperAdmin,
+        redirect: json?.redirect,
+      });
       try {
         await signInWithToken(token);
       } catch (saveErr) {
