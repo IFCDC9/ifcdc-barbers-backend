@@ -25,8 +25,9 @@ export default function RegisterScreen({ navigation }: { navigation: any }) {
   const [fullName, setFullName] = React.useState("");
   const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
-  const [accountType, setAccountType] = React.useState<"customer" | "barber">("customer");
+  const [accountType, setAccountType] = React.useState<"customer" | "barber" | "shop_owner">("customer");
   const [busy, setBusy] = React.useState(false);
+  const submittingRef = React.useRef(false);
 
   const googleAuthConfig = React.useMemo(() => getGoogleIdTokenAuthConfig(), []);
   const googleConfigured = Boolean(
@@ -145,6 +146,8 @@ export default function RegisterScreen({ navigation }: { navigation: any }) {
   };
 
   const register = async () => {
+    if (submittingRef.current) return;
+    submittingRef.current = true;
     try {
       setBusy(true);
       const { token, json } = await registerWithEmailPassword(
@@ -170,6 +173,7 @@ export default function RegisterScreen({ navigation }: { navigation: any }) {
     } catch (e) {
       Alert.alert("Create account", e instanceof Error ? e.message : String(e));
     } finally {
+      submittingRef.current = false;
       setBusy(false);
     }
   };
@@ -233,6 +237,13 @@ export default function RegisterScreen({ navigation }: { navigation: any }) {
             />
           </View>
         </View>
+        <View style={{ height: 10 }} />
+        <GlowButton
+          label="Shop owner"
+          onPress={() => setAccountType("shop_owner")}
+          variant={accountType === "shop_owner" ? "primary" : "outline"}
+          disabled={busy}
+        />
         <View style={{ height: 10 }} />
         <TextInput
           value={email}

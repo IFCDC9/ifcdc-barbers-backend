@@ -147,10 +147,10 @@ export function createAuthRouter({ sendEmail }) {
       const email = normalizeEmail(req.body?.email);
       const password = String(req.body?.password || "");
       const wireRole = String(req.body?.role || "").trim().toLowerCase();
-      if (wireRole === "admin" || wireRole === "super_admin" || wireRole === "shop_owner") {
+      if (wireRole === "admin" || wireRole === "super_admin") {
         return res.status(403).json({
           error: "forbidden_role",
-          message: "Admin accounts cannot be created through registration.",
+          message: "Elevated accounts cannot be created through registration.",
         });
       }
       if (isSuperAdminEmail(email)) {
@@ -161,8 +161,11 @@ export function createAuthRouter({ sendEmail }) {
       }
 
       const role = resolveRoleFromTrustedSource(req);
-      if (role !== "user" && role !== "barber") {
-        return res.status(400).json({ error: "invalid_role", message: "Account type must be customer or barber." });
+      if (role !== "user" && role !== "barber" && role !== "shop_owner") {
+        return res.status(400).json({
+          error: "invalid_role",
+          message: "Account type must be customer, barber, or shop owner.",
+        });
       }
 
       if (!name) return res.status(400).json({ error: "name_required", message: "Name is required" });
@@ -176,7 +179,7 @@ export function createAuthRouter({ sendEmail }) {
       const created = await dbQuery(
         `INSERT INTO app_users (name, email, password_hash, role)
          VALUES ($1, $2, $3, $4)
-         RETURNING id, name, email, role, barber_id, business_id`,
+         RETURNING id, name, email, role, barber_id, business_id, created_at`,
         [name || null, email, passwordHash, role]
       );
       const user = created.rows?.[0];
@@ -213,7 +216,7 @@ export function createAuthRouter({ sendEmail }) {
         return res.status(400).json({ error: "missing_credentials", message: "Email and password required" });
       }
       const found = await dbQuery(
-        "SELECT id, name, email, password_hash, role, barber_id, business_id FROM app_users WHERE email = $1 LIMIT 1",
+        "SELECT id, name, email, password_hash, role, barber_id, business_id, created_at FROM app_users WHERE lower(trim(email::text)) = $1 LIMIT 1",
         [email]
       );
       const user = found.rows?.[0] || null;
@@ -263,6 +266,51 @@ export function createAuthRouter({ sendEmail }) {
     } catch (e) {
       console.error("[auth] login error:", e);
       return res.status(500).json({ ok: false, success: false, error: "server_error", message: "Login failed" });
+    }
+  });
+
+  router.get("/me", requireAuth, async (req, res) => {
+    try {
+      const id = String(req.user?.id || "").trim();
+      if (!id) {
+        return res.status(401).json({
+          ok: false,
+          success: false,
+          error: "unauthorized",
+          message: "Invalid token subject",
+        });
+      }
+      const found = await dbQuery(
+        `SELECT id, name, email, role, barber_id, business_id, created_at
+         FROM app_users WHERE id = $1::uuid LIMIT 1`,
+        [id],
+      );
+      const user = found.rows?.[0] || null;
+      if (!user) {
+        return res.status(401).json({
+          ok: false,
+          success: false,
+          error: "user_not_found",
+          message: "Account no longer exists.",
+        });
+      }
+      const claims = jwtClaimsFromAppUser(user);
+      const publicUser = publicUserFromAppUser(user);
+      const redirect = postLoginRedirectFromClaims(claims);
+      return res.json({
+        ok: true,
+        success: true,
+        user: publicUser,
+        redirect,
+      });
+    } catch (e) {
+      console.error("[auth] /me error:", e);
+      return res.status(500).json({
+        ok: false,
+        success: false,
+        error: "server_error",
+        message: "Session lookup failed",
+      });
     }
   });
 
@@ -374,7 +422,7 @@ export function createAuthRouter({ sendEmail }) {
       }
 
       const byEmail = await dbQuery(
-        "SELECT id, name, email, password_hash, role, barber_id, business_id, google_id FROM app_users WHERE email = $1 LIMIT 1",
+        "SELECT id, name, email, password_hash, role, barber_id, business_id, google_id FROM app_users WHERE lower(trim(email::text)) = $1 LIMIT 1",
         [email],
       );
       const userByEmail = byEmail.rows?.[0] || null;

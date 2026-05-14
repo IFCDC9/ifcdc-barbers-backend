@@ -31,6 +31,11 @@ export function jwtClaimsFromAppUser(user) {
  */
 export function publicUserFromAppUser(user) {
   const c = jwtClaimsFromAppUser(user);
+  const createdAt = user?.created_at
+    ? new Date(user.created_at).toISOString()
+    : user?.createdAt
+      ? new Date(user.createdAt).toISOString()
+      : null;
   return {
     id: user.id,
     name: user.full_name ?? user.name,
@@ -40,6 +45,7 @@ export function publicUserFromAppUser(user) {
     businessId: c.businessId,
     isOwner: c.isOwner,
     isSuperAdmin: c.isSuperAdmin,
+    createdAt,
   };
 }
 

@@ -26,6 +26,7 @@ export default function LoginScreen({ navigation }: { navigation: any }) {
   const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
   const [busy, setBusy] = React.useState(false);
+  const submittingRef = React.useRef(false);
 
   const googleAuthConfig = React.useMemo(() => getGoogleIdTokenAuthConfig(), []);
   const googleConfigured = Boolean(
@@ -150,6 +151,8 @@ export default function LoginScreen({ navigation }: { navigation: any }) {
   };
 
   const login = async () => {
+    if (submittingRef.current) return;
+    submittingRef.current = true;
     try {
       setBusy(true);
       const { token, json } = await loginWithEmailPassword(email.trim(), password);
@@ -172,6 +175,7 @@ export default function LoginScreen({ navigation }: { navigation: any }) {
     } catch (e) {
       Alert.alert("Sign in", e instanceof Error ? e.message : String(e));
     } finally {
+      submittingRef.current = false;
       setBusy(false);
     }
   };

@@ -1,4 +1,4 @@
-import { mapAuthErrorToMessage, type JsonAuth } from "./authSessionApi";
+import { fetchWithTimeout, mapAuthErrorToMessage, type JsonAuth } from "./authSessionApi";
 
 export type GoogleAuthUser = {
   id?: number;
@@ -49,12 +49,24 @@ export async function exchangeGoogleIdToken(
   const url = `${backendBaseUrl.replace(/\/$/, "")}/api/auth/google`;
   console.log("[auth/google] POST", url);
 
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ idToken: trimmed }),
-    signal,
-  });
+  let res: Response;
+  try {
+    res = await fetchWithTimeout(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ idToken: trimmed }),
+      signal,
+      timeoutMs: 28_000,
+    });
+  } catch (e) {
+    const name = e instanceof Error ? e.name : "";
+    if (name === "AbortError") {
+      console.error("[auth] FAIL", { method: "POST", url, status: "TIMEOUT", responseCode: 0 });
+      throw new Error(`Request timed out after 28s. Endpoint: ${url}`);
+    }
+    console.error("[auth] FAIL", { method: "POST", url, status: "NETWORK", responseCode: 0 });
+    throw new Error(mapAuthErrorToMessage(null, 0));
+  }
 
   const text = await res.text();
   let json: GoogleAuthJson = {};
@@ -70,7 +82,7 @@ export async function exchangeGoogleIdToken(
 
   const hasTok = Boolean([json.token, json.accessToken].find((t) => typeof t === "string" && t.trim()));
   if (!res.ok || !hasTok || json.error) {
-    throw new Error(mapAuthErrorToMessage(json as JsonAuth, res.status));
+    throw new Error(mapAuthErrorToMessage(json as unknown as JsonAuth, res.status));
   }
 
   const token = [json.token, json.accessToken].find(

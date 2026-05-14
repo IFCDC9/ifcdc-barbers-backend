@@ -278,6 +278,37 @@ app.use(cors({ origin: "*" }));
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
+/**
+ * Summarize routes on the auth router (for production boot logs).
+ */
+function summarizeAuthRouterPaths(router) {
+  const out = [];
+  for (const layer of router?.stack || []) {
+    const r = layer?.route;
+    if (!r?.path) continue;
+    const methods = r.methods || {};
+    for (const verb of Object.keys(methods)) {
+      if (methods[verb]) out.push(`${verb.toUpperCase()} /api/auth${r.path}`);
+    }
+  }
+  return out;
+}
+
+// Auth (JWT + password reset via Resend) — mount early, before other `/api/*` routers and the JSON 404.
+const authRouter = createAuthRouter({ sendEmail });
+// Explicit surface: some deployments/proxies mis-handle nested GET registration; this always reaches `router.get("/me", …)`.
+app.get("/api/auth/me", (req, res, next) => {
+  const saved = req.url;
+  const q = saved.includes("?") ? saved.slice(saved.indexOf("?")) : "";
+  req.url = `/me${q}`;
+  authRouter.handle(req, res, (err) => {
+    req.url = saved;
+    next(err);
+  });
+});
+app.use("/api/auth", authRouter);
+console.log("[boot] mounted /api/auth", summarizeAuthRouterPaths(authRouter).join(" | ") || "(no routes on stack)");
+
 /** Mobile app bookings — must register before the 404 handler (and any future catch-alls). */
 app.get("/api/app-bookings/health", (_req, res) => {
   res.set("Cache-Control", "no-store");
@@ -319,11 +350,6 @@ function requireAdminOrSuper(req, res, next) {
   if (role === "super_admin" || role === "admin") return next();
   return res.status(403).json({ ok: false, message: "Access denied" });
 }
-
-// Auth (JWT + password reset via Resend)
-const authRouter = createAuthRouter({ sendEmail });
-app.use("/api/auth", authRouter);
-console.log("[auth] mounted /api/auth");
 
 // Backwards-compat: keep legacy endpoints used by older client code.
 app.post("/api/login", async (req, res) => {

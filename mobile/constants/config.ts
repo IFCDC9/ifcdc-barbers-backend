@@ -23,13 +23,18 @@ const apiBaseEnv =
     ? String(process.env.EXPO_PUBLIC_API_URL || process.env.EXPO_PUBLIC_BACKEND_URL || "").trim()
     : "";
 
-const resolvedBaseRaw = (apiBaseEnv || PRODUCTION_API_BASE).replace(/\/$/, "");
+const useLocalApiExplicit =
+  typeof process !== "undefined" && String(process.env.EXPO_PUBLIC_USE_LOCAL_API || "").trim() === "1";
 
 /**
  * API origin: env override when set, else production Render URL.
- * In production builds, localhost/ngrok overrides are ignored so the app always hits Render.
+ * Production builds ignore localhost/ngrok env overrides.
+ * In __DEV__, the iOS Simulator cannot reach the host's "localhost" — use production unless
+ * `EXPO_PUBLIC_USE_LOCAL_API=1` is set (then the env URL is honored, including tunnels).
  */
 export const BACKEND_URL = (() => {
+  let base = (apiBaseEnv || PRODUCTION_API_BASE).replace(/\/$/, "");
+
   if (!__DEV__ && apiBaseEnv && looksLikeLocalhostApi(apiBaseEnv)) {
     console.warn(
       "[IFCDC] ignoring EXPO_PUBLIC_API_URL / EXPO_PUBLIC_BACKEND_URL (localhost or tunnel) in production build — using",
@@ -37,7 +42,22 @@ export const BACKEND_URL = (() => {
     );
     return PRODUCTION_API_BASE.replace(/\/$/, "");
   }
-  return resolvedBaseRaw;
+
+  if (
+    __DEV__ &&
+    !Constants.isDevice &&
+    apiBaseEnv &&
+    looksLikeLocalhostApi(apiBaseEnv) &&
+    !useLocalApiExplicit
+  ) {
+    console.warn(
+      "[IFCDC] Simulator: localhost/tunnel API URL ignored — using production. Set EXPO_PUBLIC_USE_LOCAL_API=1 to force local API.",
+      PRODUCTION_API_BASE,
+    );
+    base = PRODUCTION_API_BASE.replace(/\/$/, "");
+  }
+
+  return base;
 })();
 
 export const API_URL = BACKEND_URL;

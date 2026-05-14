@@ -18,6 +18,7 @@ export async function ensureUsersRoleColumn() {
   `);
 
   await dbQuery(`ALTER TABLE app_users ADD COLUMN IF NOT EXISTS barber_id BIGINT;`);
+  await dbQuery(`ALTER TABLE app_users ADD COLUMN IF NOT EXISTS business_id BIGINT;`);
 
   // Enforce allowed values via CHECK constraint (idempotent).
   await dbQuery(`
@@ -30,13 +31,17 @@ export async function ensureUsersRoleColumn() {
       ) THEN
         ALTER TABLE app_users
           ADD CONSTRAINT app_users_role_allowed
-          CHECK (role IN ('super_admin','admin','barber','user'));
+          CHECK (role IN ('super_admin','admin','shop_owner','barber','user'));
       END IF;
     END $$;
   `);
 
   // Ensure default exists (older rows may have null role).
   await dbQuery(`UPDATE app_users SET role = 'user' WHERE role IS NULL;`);
+
+  await dbQuery(
+    `CREATE INDEX IF NOT EXISTS app_users_business_id_idx ON app_users (business_id) WHERE business_id IS NOT NULL;`,
+  );
 }
 
 /** Google Sign-In: stable link on `app_users` (Postgres). Safe to run every boot. */

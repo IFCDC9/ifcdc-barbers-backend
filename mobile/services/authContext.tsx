@@ -1,6 +1,7 @@
 import React from "react";
 import { signOutSupabase } from "../lib/supabase";
 import { decodeJwtPayload, isOwnerAdminDashboardPayload } from "../auth/jwtSession";
+import { getAuthMe } from "../auth/authSessionApi";
 import { getAuthToken, setAuthToken } from "./authService";
 
 export type SessionKind = "owner" | "default";
@@ -37,6 +38,37 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setLoading(true);
     try {
       const t = await getAuthToken();
+      if (!t) {
+        setToken(null);
+        setSessionKind("default");
+        return;
+      }
+      const me = await getAuthMe(t, 15_000);
+      if (!me.ok) {
+        if (me.status === 401 || me.status === 403) {
+          console.warn("[auth] stored session rejected; clearing token", { status: me.status, url: me.url });
+          await setAuthToken(null);
+          setToken(null);
+          setSessionKind("default");
+          return;
+        }
+        if (me.status === 404) {
+          console.warn("[auth] GET /api/auth/me missing on server — using JWT until API is deployed", { url: me.url });
+          setToken(t);
+          setSessionKind(tokenToSessionKind(t));
+          return;
+        }
+        if (me.status === 0) {
+          console.warn("[auth] /me unreachable (network/timeout); keeping cached JWT", { url: me.url });
+          setToken(t);
+          setSessionKind(tokenToSessionKind(t));
+          return;
+        }
+        console.warn("[auth] /me unexpected status; keeping cached JWT", { status: me.status, url: me.url });
+        setToken(t);
+        setSessionKind(tokenToSessionKind(t));
+        return;
+      }
       setToken(t);
       setSessionKind(tokenToSessionKind(t));
     } finally {

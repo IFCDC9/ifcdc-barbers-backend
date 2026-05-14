@@ -761,6 +761,20 @@ apiRouter.post("/create-paypal-order", async (req, res) => {
   }
 })
 
+// Repo-root `authRoutes.js` (Postgres `app_users`, mobile JWT) — must be first so `/api/auth/*` is not only the legacy `src/routes/authRoutes` (Supabase `users` table).
+try {
+  const { sendEmail } = require("../emailResend.cjs")
+  const { createAuthRouter } = await import("../authRoutes.js")
+  const platformAppUsersAuth = createAuthRouter({ sendEmail })
+  apiRouter.use("/auth", platformAppUsersAuth)
+  console.log("[boot] mounted /api/auth (root authRoutes.js — app_users)")
+} catch (err) {
+  console.warn(
+    "[boot] root authRoutes.js not mounted on /api/auth:",
+    err instanceof Error ? err.message : String(err),
+  )
+}
+
 apiRouter.use("/auth", authRoutes)
 apiRouter.use("/auth", supabaseBridgeRoutes)
 apiRouter.use("/dashboard", dashboardRoutes)

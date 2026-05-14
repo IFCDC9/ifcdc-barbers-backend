@@ -5,10 +5,14 @@ export type JsonAuth = {
   success?: boolean;
   token?: string;
   user?: {
+    id?: string;
     email?: string;
     role?: string;
     isOwner?: boolean;
     isSuperAdmin?: boolean;
+    createdAt?: string | null;
+    businessId?: number | null;
+    barberId?: number | null;
   };
   redirect?: string;
   error?: string;
@@ -16,15 +20,35 @@ export type JsonAuth = {
   detail?: string;
 };
 
+const DEFAULT_AUTH_TIMEOUT_MS = 28_000;
+
 function clip(s: string, max: number) {
   const t = String(s || "");
   return t.length <= max ? t : `${t.slice(0, max)}…`;
 }
 
+/** Fetch with wall-clock timeout; aborts if `userSignal` fires or timeout elapses. */
+export async function fetchWithTimeout(
+  url: string,
+  init: RequestInit & { timeoutMs?: number },
+): Promise<Response> {
+  const { timeoutMs = DEFAULT_AUTH_TIMEOUT_MS, signal: userSignal, ...rest } = init;
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  const onUserAbort = () => ctrl.abort();
+  if (userSignal) userSignal.addEventListener("abort", onUserAbort);
+  try {
+    return await fetch(url, { ...rest, signal: ctrl.signal });
+  } finally {
+    clearTimeout(t);
+    if (userSignal) userSignal.removeEventListener("abort", onUserAbort);
+  }
+}
+
 export function loginResponseSucceeded(status: number, json: JsonAuth | null): boolean {
   if (!json || status < 200 || status >= 300) return false;
-  const t = String(json.token || "").trim();
-  if (!t) return false;
+  const tok = String(json.token || "").trim();
+  if (!tok) return false;
   if (json.ok === false || json.success === false) return false;
   return json.ok === true || json.success === true || Boolean(json.token);
 }
@@ -43,6 +67,9 @@ export function mapAuthErrorToMessage(json: JsonAuth | null, status: number): st
   if (code === "invalid_password") return msg || "Wrong password.";
   if (code === "invalid_login") return msg || "Invalid email or password.";
   if (code === "missing_credentials") return msg || "Enter your email and password.";
+
+  if (code === "forbidden_role") return msg || "That account type cannot be created here.";
+  if (code === "invalid_role") return msg || "Choose a valid account type.";
 
   if (code === "google_oauth_not_configured") {
     return "Google sign-in is not configured on the server (missing GOOGLE_CLIENT_ID). Ask an admin to add the Web OAuth client ID on Render.";
@@ -70,23 +97,30 @@ export async function postAuthJson(
   path: string,
   body: Record<string, unknown>,
   signal?: AbortSignal,
+  timeoutMs: number = DEFAULT_AUTH_TIMEOUT_MS,
 ): Promise<{ json: JsonAuth; status: number; raw: string; url: string }> {
   const url = apiFullUrl(path);
   console.log("[auth] POST", url, { bodyKeys: Object.keys(body), BACKEND_URL });
 
   let res: Response;
   try {
-    res = await fetch(url, {
+    res = await fetchWithTimeout(url, {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify(body),
       signal,
+      timeoutMs,
     });
   } catch (e) {
     const name = e instanceof Error ? e.name : "";
     const m = e instanceof Error ? e.message : String(e);
-    console.warn("[auth] fetch error:", { url, name, message: m });
-    if (name === "AbortError") throw e;
+    if (name === "AbortError") {
+      console.error("[auth] FAIL", { method: "POST", url, status: "TIMEOUT", responseCode: 0, message: m });
+      throw new Error(
+        `Request timed out after ${Math.round(timeoutMs / 1000)}s. Endpoint: ${url}`,
+      );
+    }
+    console.error("[auth] FAIL", { method: "POST", url, status: "NETWORK", responseCode: 0, message: m });
     throw new Error(mapAuthErrorToMessage(null, 0));
   }
 
@@ -97,9 +131,24 @@ export async function postAuthJson(
   try {
     json = raw ? (JSON.parse(raw) as JsonAuth) : {};
   } catch {
-    throw new Error(
-      `Server returned non-JSON (HTTP ${res.status}). ${clip(raw, 240)}`,
-    );
+    console.error("[auth] FAIL", {
+      method: "POST",
+      url,
+      status: "NON_JSON",
+      responseCode: res.status,
+      body: clip(raw, 400),
+    });
+    throw new Error(`Server returned non-JSON (HTTP ${res.status}). ${clip(raw, 240)}`);
+  }
+
+  if (!loginResponseSucceeded(res.status, json)) {
+    console.warn("[auth] FAIL", {
+      method: "POST",
+      url,
+      responseCode: res.status,
+      error: json?.error,
+      message: clip(String(json?.message || ""), 200),
+    });
   }
 
   return { json, status: res.status, raw, url };
@@ -113,15 +162,80 @@ export async function loginWithEmailPassword(email: string, password: string) {
   throw new Error(mapAuthErrorToMessage(json, status));
 }
 
+export type RegisterAccountType = "customer" | "barber" | "shop_owner";
+
 export async function registerWithEmailPassword(
   name: string,
   email: string,
   password: string,
-  accountType: "customer" | "barber" = "customer",
+  accountType: RegisterAccountType = "customer",
 ) {
   const { json, status } = await postAuthJson("/api/auth/register", { name, email, password, accountType });
   if (loginResponseSucceeded(status, json)) {
     return { token: String(json.token).trim(), json };
   }
   throw new Error(mapAuthErrorToMessage(json, status));
+}
+
+/**
+ * Validates stored JWT against `GET /api/auth/me` (short timeout).
+ * Use on cold start so revoked users or bad tokens clear immediately.
+ */
+export async function getAuthMe(
+  token: string,
+  timeoutMs = 15_000,
+): Promise<{ ok: boolean; status: number; json: JsonAuth; url: string }> {
+  const url = apiFullUrl("/api/auth/me");
+  let res: Response;
+  try {
+    res = await fetchWithTimeout(url, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
+      timeoutMs,
+    });
+  } catch (e) {
+    const name = e instanceof Error ? e.name : "";
+    console.error("[auth] FAIL", {
+      method: "GET",
+      url,
+      status: name === "AbortError" ? "TIMEOUT" : "NETWORK",
+      responseCode: 0,
+      message: e instanceof Error ? e.message : String(e),
+    });
+    return { ok: false, status: 0, json: {}, url };
+  }
+
+  const raw = await res.text();
+  let json: JsonAuth = {};
+  try {
+    json = raw ? (JSON.parse(raw) as JsonAuth) : {};
+  } catch {
+    console.error("[auth] FAIL", {
+      method: "GET",
+      url,
+      status: "NON_JSON",
+      responseCode: res.status,
+      body: clip(raw, 400),
+    });
+    return { ok: false, status: res.status, json: {}, url };
+  }
+
+  const ok =
+    res.status >= 200 &&
+    res.status < 300 &&
+    json.ok !== false &&
+    json.success !== false &&
+    Boolean(json.user);
+
+  if (!ok) {
+    console.warn("[auth] FAIL", {
+      method: "GET",
+      url,
+      responseCode: res.status,
+      error: json?.error,
+      message: clip(String(json?.message || ""), 200),
+    });
+  }
+
+  return { ok, status: res.status, json, url };
 }

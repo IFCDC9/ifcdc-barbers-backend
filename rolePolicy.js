@@ -1,5 +1,5 @@
 /**
- * External requests may only claim `user` (Customer) or `barber`.
+ * External requests may only claim `user` (Customer), `barber`, or `shop_owner`.
  * `super_admin` / platform owner is never accepted from the wire — only created via server seed.
  */
 import { normalizeEmail } from "./authStore.js";
@@ -7,8 +7,8 @@ import { normalizeEmail } from "./authStore.js";
 /** Fixed platform owner inbox — the only email that may hold `super_admin`. */
 export const CANONICAL_SUPER_ADMIN_EMAIL = "service@ifcdc.org";
 
-/** Roles that clients may request on register/signup (Customer / Barber only). */
-export const ALLOWED_EXTERNAL_ROLES = ["user", "barber"];
+/** Roles that clients may request on register/signup (never `super_admin`). */
+export const ALLOWED_EXTERNAL_ROLES = ["user", "barber", "shop_owner"];
 
 /** Canonical owner email (normalized). */
 export function getSuperAdminEmail() {
@@ -21,7 +21,7 @@ export function isSuperAdminEmail(email) {
 
 /**
  * Registration/signup role from the request: allow-listed keys only (`accountType`, `account_type`, or legacy `role`).
- * Values are clamped to Customer (`user`) or Barber (`barber`).
+ * Values are clamped to Customer (`user`), Barber (`barber`), or Shop owner (`shop_owner`).
  */
 export function resolveRoleFromTrustedSource(req) {
   const body = req?.body && typeof req.body === "object" ? req.body : {};
@@ -30,12 +30,13 @@ export function resolveRoleFromTrustedSource(req) {
 }
 
 /**
- * Clamp intent string to Customer (user) or Barber only.
+ * Clamp intent string to Customer (`user`), Barber, or Shop owner only.
  * Prefer `resolveRoleFromTrustedSource(req)` for HTTP handlers.
  */
 export function resolveRoleFromExternalRequest(bodyRoleRaw) {
-  let r = String(bodyRoleRaw ?? "user").trim().toLowerCase();
+  let r = String(bodyRoleRaw ?? "user").trim().toLowerCase().replace(/\s+/g, "_");
   if (r === "customer") r = "user";
+  if (r === "shopowner" || r === "shop-owner") r = "shop_owner";
   if (!ALLOWED_EXTERNAL_ROLES.includes(r)) {
     r = "user";
   }
@@ -49,7 +50,5 @@ export function resolveSignupRole(_email, bodyRoleRaw) {
 
 /** Clamp a raw role string to allowed external roles only. */
 export function sanitizeUntrustedRole(roleRaw) {
-  let r = String(roleRaw ?? "user").trim().toLowerCase();
-  if (r === "customer") r = "user";
-  return ALLOWED_EXTERNAL_ROLES.includes(r) ? r : "user";
+  return resolveRoleFromExternalRequest(roleRaw);
 }

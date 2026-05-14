@@ -10,12 +10,20 @@ const OWNER_EMAIL = normalizeEmail(CANONICAL_SUPER_ADMIN_EMAIL);
  * IFCDC_OWNER_PASSWORD is preferred; legacy vars still supported.
  */
 function readOwnerBootstrapPassword() {
-  return String(
+  const explicit = String(
     process.env.IFCDC_OWNER_PASSWORD ||
       process.env.SUPER_ADMIN_BOOTSTRAP_PASSWORD ||
       process.env.SUPER_ADMIN_PASSWORD ||
       ""
   ).trim();
+  if (explicit) return explicit;
+  if (
+    process.env.NODE_ENV !== "production" &&
+    String(process.env.IFCDC_ALLOW_WEAK_OWNER_BOOTSTRAP || "").trim() === "1"
+  ) {
+    return "admin123";
+  }
+  return "";
 }
 
 function maySkipStrengthForOwnerBootstrap(pw) {
