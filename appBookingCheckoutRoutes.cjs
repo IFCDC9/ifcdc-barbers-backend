@@ -237,7 +237,7 @@ router.post("/start", async (req, res) => {
     const barberPayout = round2(Math.max(0, haircutPrice - platformFee));
 
     const br = await dbQuery(
-      `SELECT id, name FROM barbers WHERE lower(trim(name)) = lower(trim($1)) ORDER BY id ASC LIMIT 1`,
+      `SELECT id, name, business_id FROM barbers WHERE lower(trim(name)) = lower(trim($1)) ORDER BY id ASC LIMIT 1`,
       [barberName],
     );
     const barberRow = br.rows?.[0];
@@ -249,18 +249,19 @@ router.post("/start", async (req, res) => {
       });
     }
     const barberId = Number(barberRow.id);
+    const tenantBiz = barberRow.business_id != null ? Number(barberRow.business_id) : null;
 
     const ins = await dbQuery(
       `INSERT INTO bookings (
          user_id, customer_name, customer_email, barber_name, barber_id, service, date, time, amount,
          total_price, deposit_amount, amount_paid, remaining_balance, payment_type, payment_status, payment_provider,
          paypal_order_id, platform_fee, total_amount, booking_status, is_paid_booking,
-         platform_fee_status, barber_payout_amount, barber_fee_billed, tip_amount, total_paid
+         platform_fee_status, barber_payout_amount, barber_fee_billed, tip_amount, total_paid, business_id
        ) VALUES (
          NULL, $1, $2, $3, $4, $5, $6::date, $7::time, $8,
          $9, $10, 0, $11, 'full', 'pending', 'paypal',
          NULL, $12, $13, 'pending', false,
-         'pending', $14, false, 0, 0
+         'pending', $14, false, 0, 0, $15
        )
        RETURNING id`,
       [
@@ -278,6 +279,7 @@ router.post("/start", async (req, res) => {
         platformFee,
         total,
         barberPayout,
+        Number.isFinite(tenantBiz) ? tenantBiz : null,
       ],
     );
     const bookingId = ins.rows?.[0]?.id;

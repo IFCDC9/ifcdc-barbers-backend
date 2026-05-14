@@ -33,6 +33,8 @@ export async function ensureBarberBusinessTables() {
   await dbQuery(`ALTER TABLE barbers ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();`);
 
   await dbQuery(`CREATE INDEX IF NOT EXISTS barbers_user_id_idx ON barbers (user_id);`);
+  await dbQuery(`ALTER TABLE barbers ADD COLUMN IF NOT EXISTS business_id BIGINT;`);
+  await dbQuery(`ALTER TABLE barbers ADD COLUMN IF NOT EXISTS shop_name TEXT;`);
 
   await dbQuery(`
     CREATE TABLE IF NOT EXISTS barber_services (

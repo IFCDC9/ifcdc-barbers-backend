@@ -12,6 +12,7 @@ import {
 import { dbQuery } from "./db.js";
 import { comparePassword, hashPassword, validatePasswordStrength } from "./authPasswordPolicy.js";
 import { jwtClaimsFromAppUser, publicUserFromAppUser } from "./authPlatformJwt.js";
+import { writeSecurityAudit } from "./auditSecurity.js";
 import { CANONICAL_SUPER_ADMIN_EMAIL, isSuperAdminEmail, resolveRoleFromTrustedSource } from "./rolePolicy.js";
 
 const require = createRequire(import.meta.url);
@@ -32,6 +33,11 @@ function signTokenForAppUser(userRow) {
   const claims = jwtClaimsFromAppUser(userRow);
   const secret = getJwtSecret();
   return jwt.sign(claims, secret, { expiresIn: "7d" });
+}
+
+/** Issue HS256 JWT for an `app_users` row (onboarding, auth, etc.). */
+export function issueAppUserJwt(userRow) {
+  return signTokenForAppUser(userRow);
 }
 
 function postLoginRedirectFromClaims(claims) {
@@ -141,7 +147,7 @@ export function createAuthRouter({ sendEmail }) {
       const email = normalizeEmail(req.body?.email);
       const password = String(req.body?.password || "");
       const wireRole = String(req.body?.role || "").trim().toLowerCase();
-      if (wireRole === "admin" || wireRole === "super_admin") {
+      if (wireRole === "admin" || wireRole === "super_admin" || wireRole === "shop_owner") {
         return res.status(403).json({
           error: "forbidden_role",
           message: "Admin accounts cannot be created through registration.",
@@ -170,7 +176,7 @@ export function createAuthRouter({ sendEmail }) {
       const created = await dbQuery(
         `INSERT INTO app_users (name, email, password_hash, role)
          VALUES ($1, $2, $3, $4)
-         RETURNING id, name, email, role, barber_id`,
+         RETURNING id, name, email, role, barber_id, business_id`,
         [name || null, email, passwordHash, role]
       );
       const user = created.rows?.[0];
@@ -207,7 +213,7 @@ export function createAuthRouter({ sendEmail }) {
         return res.status(400).json({ error: "missing_credentials", message: "Email and password required" });
       }
       const found = await dbQuery(
-        "SELECT id, name, email, password_hash, role, barber_id FROM app_users WHERE email = $1 LIMIT 1",
+        "SELECT id, name, email, password_hash, role, barber_id, business_id FROM app_users WHERE email = $1 LIMIT 1",
         [email]
       );
       const user = found.rows?.[0] || null;
@@ -239,6 +245,13 @@ export function createAuthRouter({ sendEmail }) {
         isOwner: publicUser.isOwner,
         isSuperAdmin: publicUser.isSuperAdmin,
         redirect,
+      });
+      void writeSecurityAudit({
+        eventType: "login_success",
+        actorUserId: user.id,
+        actorEmail: publicUser.email,
+        req,
+        metadata: { role: publicUser.role, redirect },
       });
       return res.json({
         ok: true,
@@ -338,7 +351,7 @@ export function createAuthRouter({ sendEmail }) {
       }
 
       const byGoogle = await dbQuery(
-        "SELECT id, name, email, password_hash, role, barber_id, google_id FROM app_users WHERE google_id = $1 LIMIT 1",
+        "SELECT id, name, email, password_hash, role, barber_id, business_id, google_id FROM app_users WHERE google_id = $1 LIMIT 1",
         [googleId],
       );
       const userByGoogle = byGoogle.rows?.[0] || null;
@@ -361,7 +374,7 @@ export function createAuthRouter({ sendEmail }) {
       }
 
       const byEmail = await dbQuery(
-        "SELECT id, name, email, password_hash, role, barber_id, google_id FROM app_users WHERE email = $1 LIMIT 1",
+        "SELECT id, name, email, password_hash, role, barber_id, business_id, google_id FROM app_users WHERE email = $1 LIMIT 1",
         [email],
       );
       const userByEmail = byEmail.rows?.[0] || null;
@@ -398,7 +411,7 @@ export function createAuthRouter({ sendEmail }) {
       const created = await dbQuery(
         `INSERT INTO app_users (name, email, password_hash, role, google_id)
          VALUES ($1, $2, $3, 'user', $4)
-         RETURNING id, name, email, role, barber_id, google_id`,
+         RETURNING id, name, email, role, barber_id, business_id, google_id`,
         [name || email.split("@")[0] || "User", email, passwordHash, googleId],
       );
       const nu = created.rows?.[0];

@@ -19,6 +19,9 @@ import { ensureBookingsTable } from "./bookingsMigrations.js";
 import { ensureBarberBusinessTables } from "./barberBusinessMigrations.js";
 import { createBarberBusinessRouter } from "./barberBusinessRoutes.js";
 import { createBookingsRouter, insertAuraVoiceBookingRow } from "./bookingsRoutes.js";
+import { createBookingsAdminGuard } from "./bookingsAdminGuard.js";
+import { dbQuery } from "./db.js";
+import { ensureSecurityAuditTable, ensureSecurityTenantColumns } from "./securityTenantMigrations.js";
 import {
   auraUnclearFallbackReply,
   auraStructuredIntentFromKeywords,
@@ -432,10 +435,12 @@ const stylesRouter = createStylesRouter({ uploadDir: path.join(__dirname, "backe
 app.use("/api/styles", stylesRouter);
 app.use("/styles", stylesRouter);
 
+const requireBookingsAdmin = createBookingsAdminGuard({ resolveAuthPayload, dbQuery });
+
 // Production bookings (Postgres) — replaces in-memory bookingRoutesMinimal.cjs for live payments.
 const bookingsRouter = createBookingsRouter({
   sendBookingEmail: require("./bookingEmail.cjs").sendBookingEmail,
-  requireAdmin: requireAdminOrSuper,
+  requireAdmin: requireBookingsAdmin,
 });
 app.use(bookingsRouter);
 
@@ -745,6 +750,8 @@ async function startServer() {
   }
   try {
     await ensureBookingsTable();
+    await ensureSecurityAuditTable();
+    await ensureSecurityTenantColumns();
   } catch (e) {
     console.error("[migrate] bookings failed:", e?.message || e);
   }

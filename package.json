@@ -15,7 +15,7 @@
     "tunnel": "ngrok http 10000",
     "test:resend": "node scripts/test-resend.cjs",
     "test:paypal": "node scripts/verify-paypal-oauth.cjs",
-    "set-super-admin-password": "node scripts/setSuperAdminPassword.mjs"
+    "test:security": "node tests/securityPolicy.test.mjs",
   },
   "dependencies": {
     "@paypal/checkout-server-sdk": "^1.0.3",

@@ -54,7 +54,7 @@ export function mountShopTeamRoutes(app) {
     }
   });
 
-  r.get("/api/shop/join-code", requireAuth, requireRole(["admin", "super_admin"]), async (req, res) => {
+  r.get("/api/shop/join-code", requireAuth, requireRole(["admin", "super_admin", "shop_owner"]), async (req, res) => {
     try {
       const scope = await getBusinessScopeForUser(req.user);
       let businessId = scope.businessId != null ? Number(scope.businessId) : NaN;
@@ -89,7 +89,7 @@ export function mountShopTeamRoutes(app) {
     }
   });
 
-  r.post("/api/shop/invite-barber", requireAuth, requireRole(["admin", "super_admin"]), async (req, res) => {
+  r.post("/api/shop/invite-barber", requireAuth, requireRole(["admin", "super_admin", "shop_owner"]), async (req, res) => {
     try {
       const name = String(req.body?.name || "").trim();
       const email = normalizeEmail(req.body?.email);

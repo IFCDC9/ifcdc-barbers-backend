@@ -6,19 +6,23 @@ import { normalizeEmail } from "./authStore.js";
 import { isSuperAdminEmail } from "./rolePolicy.js";
 
 /**
- * @param {{ id: string, email?: string, role?: string, name?: string, full_name?: string, barber_id?: string | null, barberId?: string | null }} user — row from app_users
+ * @param {{ id: string, email?: string, role?: string, name?: string, full_name?: string, barber_id?: string | null, barberId?: string | null, business_id?: number | string | null, businessId?: number | null }} user — row from app_users
  */
 export function jwtClaimsFromAppUser(user) {
   const email = normalizeEmail(user?.email);
   const dbRole = String(user?.role || "user").trim();
   const owner = isSuperAdminEmail(email) && dbRole === "super_admin";
   const isSuperAdmin = owner || dbRole === "super_admin";
+  const biz = user?.business_id ?? user?.businessId;
+  const businessIdNum = Number(biz);
+  const businessId = Number.isFinite(businessIdNum) ? businessIdNum : null;
   return {
     id: user.id,
     email: user.email,
     role: owner ? "admin" : dbRole,
     isOwner: Boolean(owner),
     isSuperAdmin: Boolean(isSuperAdmin),
+    businessId,
   };
 }
 
@@ -33,6 +37,7 @@ export function publicUserFromAppUser(user) {
     email: user.email,
     role: c.role,
     barberId: user.barber_id ?? user.barberId ?? null,
+    businessId: c.businessId,
     isOwner: c.isOwner,
     isSuperAdmin: c.isSuperAdmin,
   };

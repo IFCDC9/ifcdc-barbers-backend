@@ -1,5 +1,6 @@
 import express from "express";
 import { extractBearerToken, resolveAuthPayload } from "./authRoutes.js";
+import { isJwtGlobalSuperScope } from "./authPlatformJwt.js";
 import { dbQuery } from "./db.js";
 import { getPayPalHttpClient, ordersGetRequest } from "./paypalClient.js";
 import { roundMoney2, depositsAllowedForBooking } from "./styleBookingPricing.js";
@@ -13,6 +14,7 @@ import { computeStyleBookingBreakdown } from "./bookingBreakdown.js";
 import { BARBER_PLATFORM_FEE_USD, barberDepositsEffective } from "./subscriptionTier.js";
 import { insertBarberFeeLedgerRow } from "./barberFeeLedger.js";
 import { createDepositPaymentLink } from "./depositPaymentLink.js";
+import { tenantMatches } from "./securityPolicy.js";
 
 function getAuthPayload(req) {
   const token = extractBearerToken(req.get("authorization"));
@@ -29,15 +31,35 @@ function getAuthRole(req) {
   return payload?.role ? String(payload.role) : "";
 }
 
+async function resolveBusinessIdForBarber(barberId) {
+  const bid = Number(barberId);
+  if (!Number.isFinite(bid)) return null;
+  const r = await dbQuery(`SELECT business_id FROM barbers WHERE id = $1 LIMIT 1`, [bid]);
+  const v = r.rows?.[0]?.business_id;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
 async function canMarkBookingPaid(req, bookingRow) {
   // x-admin-key (ADMIN_SECRET) always allowed.
   const adminKey = String(req.get("x-admin-key") || "").trim();
   const expected = String(process.env.ADMIN_SECRET || "").trim();
   if (expected && adminKey && adminKey === expected) return true;
 
-  // JWT roles: admin / super_admin allowed; barber allowed only for their own barber_id.
-  const role = getAuthRole(req);
-  if (role === "super_admin" || role === "admin") return true;
+  const payload = getAuthPayload(req);
+  if (!payload) return false;
+  const role = String(payload.role || "").trim().toLowerCase();
+
+  if (isJwtGlobalSuperScope(payload) || role === "admin") return true;
+
+  if (role === "shop_owner") {
+    const userId = getAuthUserId(req);
+    if (!userId) return false;
+    const u = await dbQuery(`SELECT business_id FROM app_users WHERE id = $1::uuid LIMIT 1`, [String(userId)]);
+    const myBid = u.rows?.[0]?.business_id;
+    return tenantMatches(myBid, bookingRow?.business_id);
+  }
+
   if (role !== "barber") return false;
 
   const userId = getAuthUserId(req);
@@ -132,6 +154,7 @@ export async function insertAuraVoiceBookingRow(body, sendBookingEmail) {
   const stamp = Date.now();
   const voiceOrderId = `voice_order:${callSid}:${stamp}`;
   const voiceCaptureId = `voice_cap:${callSid}:${stamp}`;
+  const voiceBizId = await resolveBusinessIdForBarber(barberId);
 
   const insert = await dbQuery(
     `INSERT INTO bookings
@@ -141,9 +164,9 @@ export async function insertAuraVoiceBookingRow(body, sendBookingEmail) {
       style_id, style_title, style_image_url, tip_amount, total_paid,
       platform_fee, total_amount, booking_status, is_paid_booking,
       deposit_required, deposit_status, deposit_payment_link, deposit_transaction_id, deposit_paypal_order_id,
-      platform_fee_status, barber_payout_amount, barber_fee_billed)
+      platform_fee_status, barber_payout_amount, barber_fee_billed, business_id)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::date,$10::time,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,
-             $30,$31,$32,$33,$34,$35,$36,$37)
+             $30,$31,$32,$33,$34,$35,$36,$37,$38)
      ON CONFLICT (paypal_capture_id) DO NOTHING
      RETURNING id, created_at`,
     [
@@ -184,6 +207,7 @@ export async function insertAuraVoiceBookingRow(body, sendBookingEmail) {
       "pending",
       barberPayoutAmount,
       false,
+      voiceBizId,
     ]
   );
 
@@ -312,18 +336,23 @@ export function createBookingsRouter({ sendBookingEmail, requireAdmin } = {}) {
   const router = express.Router();
   const guard = typeof requireAdmin === "function" ? requireAdmin : (_req, _res, next) => next();
 
-  // Admin list
-  router.get("/api/admin/bookings", guard, async (_req, res) => {
-      const r = await dbQuery(
-      `SELECT id, user_id, customer_name, customer_email, barber_name, barber_id, client_id, service, date, time,
+  // Admin list (scoped for shop_owner — see bookingsAdminGuard)
+  router.get("/api/admin/bookings", guard, async (req, res) => {
+    const scope = req.bookingsAdminScope || { all: true };
+    const tenantWhere = scope.all ? "" : " WHERE business_id = $1 ";
+    const tenantParams = scope.all ? [] : [scope.businessId];
+    const r = await dbQuery(
+      `SELECT id, user_id, customer_name, customer_email, barber_name, barber_id, business_id, client_id, service, date, time,
               phone,
               amount, total_price, deposit_amount, amount_paid, remaining_balance,
               payment_type, payment_status, payment_provider, paypal_order_id, paypal_capture_id,
               style_id, style_title, style_image_url, tip_amount, total_paid,
               platform_fee, total_amount, booking_status, is_paid_booking, created_at
        FROM bookings
+       ${tenantWhere}
        ORDER BY created_at DESC
-       LIMIT 500`
+       LIMIT 500`,
+      tenantParams
     );
     res.json({ bookings: r.rows || [] });
   });
@@ -336,6 +365,21 @@ export function createBookingsRouter({ sendBookingEmail, requireAdmin } = {}) {
     try {
       const id = String(req.params.id || "").trim();
       if (!id) return res.status(400).json({ error: "id_required", message: "Booking id required" });
+
+      const found = await dbQuery(
+        `SELECT id, barber_id, business_id, payment_status FROM bookings WHERE id = $1::uuid LIMIT 1`,
+        [id]
+      );
+      const booking = found.rows?.[0] || null;
+      if (!booking) return res.status(404).json({ error: "not_found", message: "Booking not found" });
+
+      const allowed = await canMarkBookingPaid(req, booking);
+      if (!allowed) return res.status(403).json({ error: "forbidden", message: "Access denied" });
+
+      const scope = req.bookingsAdminScope || { all: true };
+      const tenantSql = scope.all ? "" : " AND business_id = $2 ";
+      const updateParams = scope.all ? [id] : [id, scope.businessId];
+
       const r = await dbQuery(
         `UPDATE bookings SET
            amount_paid = total_price,
@@ -343,9 +387,9 @@ export function createBookingsRouter({ sendBookingEmail, requireAdmin } = {}) {
            payment_status = 'paid',
            payment_type = 'full',
            total_paid = COALESCE(tip_amount, 0) + total_price
-         WHERE id = $1::uuid AND payment_status = 'deposit_paid'
+         WHERE id = $1::uuid AND payment_status = 'deposit_paid' ${tenantSql}
          RETURNING id, payment_status, amount_paid, remaining_balance, total_price, tip_amount, total_paid`,
-        [id]
+        updateParams
       );
       if (!r.rows?.length) {
         return res.status(404).json({
@@ -371,7 +415,7 @@ export function createBookingsRouter({ sendBookingEmail, requireAdmin } = {}) {
       if (!id) return res.status(400).json({ error: "id_required", message: "Booking id required" });
 
       const found = await dbQuery(
-        `SELECT id, barber_id, payment_status, total_price, tip_amount
+        `SELECT id, barber_id, business_id, payment_status, total_price, tip_amount
          FROM bookings
          WHERE id = $1::uuid
          LIMIT 1`,
@@ -414,13 +458,17 @@ export function createBookingsRouter({ sendBookingEmail, requireAdmin } = {}) {
     }
   });
 
-  // Admin stats compatible with existing UI
-  router.get("/api/admin/stats", guard, async (_req, res) => {
+  // Admin stats compatible with existing UI (tenant-scoped for shop_owner)
+  router.get("/api/admin/stats", guard, async (req, res) => {
     try {
+      const scope = req.bookingsAdminScope || { all: true };
+      const tenantWhere = scope.all ? "" : " WHERE business_id = $1 ";
+      const tenantParams = scope.all ? [] : [scope.businessId];
       const r = await dbQuery(
         `SELECT id, customer_name AS name, customer_email AS customerEmail,
               phone,
               barber_name AS barber, barber_id AS barberId,
+              business_id AS "businessId",
               service, style_title AS "styleTitle", date::text AS date, to_char(time, 'HH24:MI') AS time,
               amount::float AS price,
               total_price::float AS "totalPrice",
@@ -445,8 +493,10 @@ export function createBookingsRouter({ sendBookingEmail, requireAdmin } = {}) {
               payment_provider AS "paymentProvider",
               created_at
        FROM bookings
+       ${tenantWhere}
        ORDER BY created_at DESC
-       LIMIT 500`
+       LIMIT 500`,
+        tenantParams
       );
       const rows = r.rows || [];
       let platformAgg = { platformFeesCollected: 0, paidBookingsCount: 0, confirmedBookingsCount: 0 };
@@ -457,7 +507,9 @@ export function createBookingsRouter({ sendBookingEmail, requireAdmin } = {}) {
            COUNT(*) FILTER (WHERE is_paid_booking = true)::int AS paid_bookings,
            COUNT(*) FILTER (WHERE booking_status = 'confirmed')::int AS confirmed_bookings,
            COUNT(*)::int AS all_bookings
-         FROM bookings`,
+         FROM bookings
+         ${tenantWhere}`,
+          tenantParams,
         );
         const a = ar.rows?.[0] || {};
         platformAgg = {
@@ -620,6 +672,7 @@ export function createBookingsRouter({ sendBookingEmail, requireAdmin } = {}) {
 
       const userId = getAuthUserId(req);
       const styleImageUrl = quoted.styleImageUrl ?? (styleRow.image_url ? String(styleRow.image_url) : null);
+      const tenantBizIdForInsert = await resolveBusinessIdForBarber(barberId);
 
       const insert = await dbQuery(
         `INSERT INTO bookings
@@ -629,9 +682,9 @@ export function createBookingsRouter({ sendBookingEmail, requireAdmin } = {}) {
           style_id, style_title, style_image_url, tip_amount, total_paid,
           platform_fee, total_amount, booking_status, is_paid_booking,
           deposit_required, deposit_status, deposit_payment_link, deposit_transaction_id, deposit_paypal_order_id,
-          platform_fee_status, barber_payout_amount, barber_fee_billed)
+          platform_fee_status, barber_payout_amount, barber_fee_billed, business_id)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,
-                 $29,$30,$31,$32,$33,$34,$35,$36)
+                 $29,$30,$31,$32,$33,$34,$35,$36,$37)
          ON CONFLICT (paypal_capture_id) DO NOTHING
          RETURNING id, created_at`,
         [
@@ -671,6 +724,7 @@ export function createBookingsRouter({ sendBookingEmail, requireAdmin } = {}) {
           "pending",
           barberPayoutStored,
           false,
+          tenantBizIdForInsert,
         ]
       );
 

@@ -1,6 +1,6 @@
 import { dbQuery } from "./db.js";
 
-export const ALLOWED_ROLES = ["super_admin", "admin", "barber", "user"];
+export const ALLOWED_ROLES = ["super_admin", "admin", "shop_owner", "barber", "user"];
 
 export async function ensureUsersRoleColumn() {
   await dbQuery(`CREATE EXTENSION IF NOT EXISTS pgcrypto;`);
