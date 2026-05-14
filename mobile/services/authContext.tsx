@@ -37,8 +37,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [refresh]);
 
   const signInWithToken = React.useCallback(async (t: string) => {
-    await setAuthToken(t);
-    setToken(t);
+    try {
+      await setAuthToken(t);
+      setToken(t);
+    } catch (e) {
+      const raw = e instanceof Error ? e.message : String(e);
+      console.error("[auth] SecureStore setItemAsync failed:", raw);
+      const hint =
+        /user_cancel|UserCancel|cancel/i.test(raw)
+          ? "Sign-in was cancelled before the session could be saved."
+          : "Token save failed. Try again, restart the app, or check device storage / Screen Time restrictions.";
+      throw new Error(hint);
+    }
   }, []);
 
   const signOut = React.useCallback(async () => {

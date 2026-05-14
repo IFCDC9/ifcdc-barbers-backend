@@ -39,3 +39,13 @@ export async function ensureUsersRoleColumn() {
   await dbQuery(`UPDATE app_users SET role = 'user' WHERE role IS NULL;`);
 }
 
+/** Google Sign-In: stable link on `app_users` (Postgres). Safe to run every boot. */
+export async function ensureGoogleAuthSupport() {
+  await dbQuery(`ALTER TABLE app_users ADD COLUMN IF NOT EXISTS google_id TEXT;`);
+  await dbQuery(`
+    CREATE UNIQUE INDEX IF NOT EXISTS app_users_google_id_ux
+    ON app_users (google_id)
+    WHERE google_id IS NOT NULL AND btrim(google_id) <> '';
+  `);
+}
+

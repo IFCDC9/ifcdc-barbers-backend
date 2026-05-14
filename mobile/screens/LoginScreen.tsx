@@ -10,6 +10,7 @@ import { useAuth } from "../services/authContext";
 import { EXPO_GO_GOOGLE_PROMPT_OPTIONS } from "../auth/expoGooglePromptOptions";
 import { getGoogleIdTokenAuthConfig } from "../auth/googleAuthRequestConfig";
 import { exchangeGoogleIdToken } from "../auth/googleBackendLogin";
+import { loginWithEmailPassword } from "../auth/authSessionApi";
 
 const GOOGLE_REDIRECT_OPTIONS = {
   useProxy: true,
@@ -18,11 +19,7 @@ const GOOGLE_REDIRECT_OPTIONS = {
 
 export default function LoginScreen({ navigation }: { navigation: any }) {
   React.useEffect(() => {
-    try {
-      console.log("[login] screen mounted");
-    } catch (e) {
-      console.log("CRASH:", e);
-    }
+    console.log("[login] API base:", BACKEND_URL, "login URL:", apiFullUrl("/api/auth/login"));
   }, []);
 
   const { signInWithToken } = useAuth();
@@ -91,7 +88,14 @@ export default function LoginScreen({ navigation }: { navigation: any }) {
           console.log("GOOGLE RESPONSE:", wrapped.data);
 
           if (responseData.token) {
-            await signInWithToken(responseData.token);
+            try {
+              await signInWithToken(responseData.token);
+            } catch (saveErr) {
+              Alert.alert(
+                "Could not save session",
+                saveErr instanceof Error ? saveErr.message : "Token save failed.",
+              );
+            }
             return;
           }
 
@@ -122,11 +126,18 @@ export default function LoginScreen({ navigation }: { navigation: any }) {
   }, [response, signInWithToken]);
 
   const startGoogle = async () => {
+    if (!googleConfigured) {
+      Alert.alert("Google sign-in", "Google OAuth config missing on this build.");
+      return;
+    }
+    if (!request) {
+      Alert.alert("Google sign-in", "Google is still initializing. Wait a moment and try again.");
+      return;
+    }
     try {
       const result = await promptAsync(EXPO_GO_GOOGLE_PROMPT_OPTIONS);
       console.log("[auth] promptAsync done:", result.type);
     } catch (e) {
-      console.log("CRASH:", e);
       console.log("[auth] promptAsync error:", e instanceof Error ? e.message : String(e));
       Alert.alert("Google sign-in", e instanceof Error ? e.message : String(e));
     }
@@ -135,25 +146,17 @@ export default function LoginScreen({ navigation }: { navigation: any }) {
   const login = async () => {
     try {
       setBusy(true);
-      const res = await fetch(apiFullUrl("/api/auth/login"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: email.trim(), password }),
-      });
-      const raw = await res.text();
-      let json: { ok?: boolean; token?: string; error?: string } = {};
+      const { token } = await loginWithEmailPassword(email.trim(), password);
       try {
-        json = raw ? (JSON.parse(raw) as typeof json) : {};
-      } catch (parseErr) {
-        console.log("CRASH:", parseErr);
-        console.log("[login] JSON parse failed:", parseErr);
-        throw new Error("Server returned invalid response");
+        await signInWithToken(token);
+      } catch (saveErr) {
+        Alert.alert(
+          "Could not save session",
+          saveErr instanceof Error ? saveErr.message : "Token save failed.",
+        );
       }
-      if (!res.ok || !json?.ok || !json?.token) throw new Error(json?.error || "login_failed");
-      await signInWithToken(json.token);
     } catch (e) {
-      console.log("CRASH:", e);
-      Alert.alert("Login", e instanceof Error ? e.message : String(e));
+      Alert.alert("Sign in", e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
@@ -174,9 +177,17 @@ export default function LoginScreen({ navigation }: { navigation: any }) {
             <Text style={styles.or}>or</Text>
             <View style={{ height: 12 }} />
           </>
+        ) : googleConfigured ? (
+          <>
+            <Text style={styles.helper}>Preparing Google sign-in…</Text>
+            <View style={{ height: 12 }} />
+          </>
         ) : (
           <>
-            <Text style={styles.helper}>Google sign-in is temporarily unavailable.</Text>
+            <Text style={styles.helper}>
+              Google OAuth config missing: set EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID and ensure the backend has
+              GOOGLE_CLIENT_ID for POST /api/auth/google.
+            </Text>
             <View style={{ height: 12 }} />
           </>
         )}

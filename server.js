@@ -11,7 +11,7 @@ import express from "express";
 import session from "express-session";
 import { mountMinimalIfcdcApi } from "./minimalIfcdcApi.js";
 import { createAuthRouter, resolveAuthPayload } from "./authRoutes.js";
-import { ensureUsersRoleColumn } from "./authDbMigrations.js";
+import { ensureUsersRoleColumn, ensureGoogleAuthSupport } from "./authDbMigrations.js";
 import { ensureInitialSuperAdmin } from "./seedSuperAdmin.js";
 import { ensureStylesTables, seedSampleStylesIfEmpty } from "./stylesMigrations.js";
 import { createStylesRouter } from "./stylesRoutes.js";
@@ -733,6 +733,7 @@ async function startServer() {
   // DB migrations needed for auth / RBAC.
   try {
     await ensureUsersRoleColumn();
+    await ensureGoogleAuthSupport();
   } catch (e) {
     console.error("[migrate] app_users/role failed:", e?.message || e);
   }

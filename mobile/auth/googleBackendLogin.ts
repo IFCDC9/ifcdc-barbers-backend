@@ -1,3 +1,5 @@
+import { mapAuthErrorToMessage, type JsonAuth } from "./authSessionApi";
+
 export type GoogleAuthUser = {
   id?: number;
   full_name?: string | null;
@@ -40,6 +42,8 @@ export async function exchangeGoogleIdToken(
   }
 
   const url = `${backendBaseUrl.replace(/\/$/, "")}/api/auth/google`;
+  console.log("[auth/google] POST", url);
+
   const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -57,16 +61,11 @@ export async function exchangeGoogleIdToken(
     );
   }
 
-  const response = { data: json, status: res.status, ok: res.ok };
-  console.log("GOOGLE RESPONSE:", response.data);
+  console.log("[auth/google] response", { status: res.status, ok: res.ok, keys: Object.keys(json) });
 
-  const succeeded =
-    res.ok && (json.success === true || json.ok === true);
-
-  if (!succeeded) {
-    const base = json.error || "google_login_failed";
-    const extra = json.detail ? `: ${json.detail}` : "";
-    throw new Error(base + extra);
+  const hasTok = Boolean([json.token, json.accessToken].find((t) => typeof t === "string" && t.trim()));
+  if (!res.ok || !hasTok || json.error) {
+    throw new Error(mapAuthErrorToMessage(json as JsonAuth, res.status));
   }
 
   const token = [json.token, json.accessToken].find(

@@ -86,3 +86,15 @@ export async function hashPassword(plainText, rounds = BCRYPT_ROUNDS) {
   const cost = Number.isFinite(r) && r >= 4 && r <= 15 ? Math.floor(r) : BCRYPT_ROUNDS;
   return bcrypt.hash(String(plainText), cost);
 }
+
+/** Compare a plaintext password to a stored bcrypt hash. */
+export async function comparePassword(plainText, passwordHash) {
+  if (plainText == null || passwordHash == null) return false;
+  const h = String(passwordHash).trim();
+  if (!h) return false;
+  try {
+    return await bcrypt.compare(String(plainText), h);
+  } catch {
+    return false;
+  }
+}

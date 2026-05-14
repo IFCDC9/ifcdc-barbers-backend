@@ -11,7 +11,7 @@ import {
 } from "./authStore.js";
 import { dbQuery } from "./db.js";
 import { ALLOWED_ROLES } from "./authDbMigrations.js";
-import { hashPassword, validatePasswordStrength } from "./authPasswordPolicy.js";
+import { comparePassword, hashPassword, validatePasswordStrength } from "./authPasswordPolicy.js";
 
 const require = createRequire(import.meta.url);
 const jwt = require("jsonwebtoken");
@@ -104,6 +104,25 @@ function resolvePublicWebUrl() {
   return base ? base.replace(/\/$/, "") : "http://localhost:5173";
 }
 
+/** Google ID token `aud` must match one of these (web + optional native Expo clients). */
+function getGoogleOAuthClientIds() {
+  const web = String(process.env.GOOGLE_CLIENT_ID || process.env.GOOGLE_WEB_CLIENT_ID || "").trim();
+  const ios = String(process.env.GOOGLE_IOS_CLIENT_ID || process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID || "").trim();
+  const android = String(process.env.GOOGLE_ANDROID_CLIENT_ID || process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID || "").trim();
+  const list = [web, ios, android].filter(Boolean);
+  return [...new Set(list)];
+}
+
+function randomPlaceholderPasswordForOAuth() {
+  let candidate = "";
+  for (let i = 0; i < 5; i++) {
+    candidate = `Aa9!${crypto.randomBytes(24).toString("base64url")}`;
+    const v = validatePasswordStrength(candidate);
+    if (v.valid) return candidate;
+  }
+  return `Aa9!${crypto.randomBytes(32).toString("hex")}!`;
+}
+
 export function createAuthRouter({ sendEmail }) {
   const router = express.Router();
 
@@ -141,13 +160,13 @@ export function createAuthRouter({ sendEmail }) {
       const user = created.rows?.[0];
       const token = signToken({ id: user.id, email: user.email, role: user.role });
 
-      return res.json({ success: true, token, user: safeUserPublic(user) });
+      return res.json({ ok: true, success: true, token, user: safeUserPublic(user) });
     } catch (e) {
       if (String(e?.message || "").toLowerCase().includes("duplicate") || e?.code === "23505") {
         return res.status(409).json({ error: "email_exists", message: "Email is already registered" });
       }
       console.error("[auth] register error:", e);
-      return res.status(500).json({ error: "server_error", message: "Register failed" });
+      return res.status(500).json({ ok: false, success: false, error: "server_error", message: "Register failed" });
     }
   });
 
@@ -157,6 +176,7 @@ export function createAuthRouter({ sendEmail }) {
       const password = String(req.body?.password || "");
       if (emailIn === ADMIN_EMAIL && password === ADMIN_PASSWORD) {
         return res.json({
+          ok: true,
           success: true,
           user: {
             email: ADMIN_EMAIL,
@@ -175,17 +195,177 @@ export function createAuthRouter({ sendEmail }) {
         [email]
       );
       const user = found.rows?.[0] || null;
-      if (!user || !user.password_hash) {
-        return res.status(401).json({ error: "invalid_login", message: "Invalid email or password" });
+      if (!user) {
+        return res.status(401).json({
+          ok: false,
+          success: false,
+          error: "user_not_found",
+          message: "No account exists for this email. Create an account or check the spelling.",
+        });
       }
-      // const ok = await bcrypt.compare(password, user.password_hash);
-      // if (!ok) return res.status(401).json({ error: "invalid_login", message: "Invalid email or password" });
+      const passwordOk = await comparePassword(password, user.password_hash);
+      if (!passwordOk) {
+        return res.status(401).json({
+          ok: false,
+          success: false,
+          error: "invalid_password",
+          message: "Wrong password. Try again or use Forgot password.",
+        });
+      }
 
       const token = signToken({ id: user.id, email: user.email, role: user.role });
-      return res.json({ success: true, token, user: safeUserPublic(user) });
+      return res.json({ ok: true, success: true, token, user: safeUserPublic(user) });
     } catch (e) {
       console.error("[auth] login error:", e);
-      return res.status(500).json({ error: "server_error", message: "Login failed" });
+      return res.status(500).json({ ok: false, success: false, error: "server_error", message: "Login failed" });
+    }
+  });
+
+  router.post("/google", async (req, res) => {
+    try {
+      const allowedAud = getGoogleOAuthClientIds();
+      if (!allowedAud.length) {
+        return res.status(503).json({
+          ok: false,
+          success: false,
+          error: "google_oauth_not_configured",
+          message:
+            "Server is missing GOOGLE_CLIENT_ID (Google Cloud → Web application OAuth client ID). Add it on Render, then redeploy.",
+        });
+      }
+
+      const idToken = String(req.body?.idToken || "").trim();
+      if (!idToken) {
+        return res.status(400).json({
+          ok: false,
+          success: false,
+          error: "idToken_required",
+          message: "Missing Google credential. Try signing in again.",
+        });
+      }
+
+      let ti;
+      try {
+        const r = await fetch(
+          `https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(idToken)}`,
+        );
+        ti = await r.json().catch(() => ({}));
+        if (!r.ok || String(ti?.error || "").trim()) {
+          console.error("[auth/google] tokeninfo failed", r.status, ti);
+          return res.status(401).json({
+            ok: false,
+            success: false,
+            error: "google_token_invalid",
+            message: ti?.error_description || ti?.error || "Google could not verify this sign-in.",
+          });
+        }
+      } catch (e) {
+        console.error("[auth/google] tokeninfo unreachable", e?.message || e);
+        return res.status(502).json({
+          ok: false,
+          success: false,
+          error: "google_verify_unreachable",
+          message: "Could not reach Google to verify sign-in. Check network and try again.",
+        });
+      }
+
+      const aud = String(ti.aud || "").trim();
+      if (!allowedAud.includes(aud)) {
+        console.error("[auth/google] aud mismatch", { aud, allowedAud });
+        return res.status(401).json({
+          ok: false,
+          success: false,
+          error: "google_audience_mismatch",
+          message:
+            "Google client ID does not match the server. Set GOOGLE_CLIENT_ID to your Web OAuth client ID (same audience as the app’s ID token).",
+        });
+      }
+
+      const googleId = String(ti.sub || "").trim();
+      const email = normalizeEmail(ti.email);
+      const name = String(ti.name || ti.given_name || "").trim();
+      const ev = ti.email_verified;
+      const emailVerified = ev === true || ev === "true" || ev === "True" || ev === 1 || ev === "1";
+
+      if (!googleId || !email) {
+        return res.status(401).json({
+          ok: false,
+          success: false,
+          error: "google_payload_invalid",
+          message: "Google did not return enough profile data to sign you in.",
+        });
+      }
+
+      if (!emailVerified) {
+        return res.status(401).json({
+          ok: false,
+          success: false,
+          error: "google_email_unverified",
+          message: "Verify this email in your Google account, then try again.",
+        });
+      }
+
+      const byGoogle = await dbQuery(
+        "SELECT id, name, email, password_hash, role, barber_id, google_id FROM app_users WHERE google_id = $1 LIMIT 1",
+        [googleId],
+      );
+      const userByGoogle = byGoogle.rows?.[0] || null;
+      if (userByGoogle) {
+        const token = signToken({
+          id: userByGoogle.id,
+          email: userByGoogle.email,
+          role: userByGoogle.role,
+        });
+        return res.json({ ok: true, success: true, token, user: safeUserPublic(userByGoogle) });
+      }
+
+      const byEmail = await dbQuery(
+        "SELECT id, name, email, password_hash, role, barber_id, google_id FROM app_users WHERE email = $1 LIMIT 1",
+        [email],
+      );
+      const userByEmail = byEmail.rows?.[0] || null;
+      if (userByEmail) {
+        if (userByEmail.google_id && String(userByEmail.google_id) !== googleId) {
+          return res.status(409).json({
+            ok: false,
+            success: false,
+            error: "google_account_conflict",
+            message: "This email is already linked to a different Google account.",
+          });
+        }
+        await dbQuery("UPDATE app_users SET google_id = $1 WHERE id = $2::uuid", [googleId, userByEmail.id]);
+        const refreshed = { ...userByEmail, google_id: googleId };
+        const token = signToken({ id: refreshed.id, email: refreshed.email, role: refreshed.role });
+        return res.json({ ok: true, success: true, token, user: safeUserPublic(refreshed) });
+      }
+
+      const pw = randomPlaceholderPasswordForOAuth();
+      const passwordHash = await hashPassword(pw);
+      const created = await dbQuery(
+        `INSERT INTO app_users (name, email, password_hash, role, google_id)
+         VALUES ($1, $2, $3, 'user', $4)
+         RETURNING id, name, email, role, barber_id, google_id`,
+        [name || email.split("@")[0] || "User", email, passwordHash, googleId],
+      );
+      const nu = created.rows?.[0];
+      if (!nu) {
+        return res.status(500).json({
+          ok: false,
+          success: false,
+          error: "google_create_user_failed",
+          message: "Could not create your account. Try again.",
+        });
+      }
+      const token = signToken({ id: nu.id, email: nu.email, role: nu.role });
+      return res.json({ ok: true, success: true, token, user: safeUserPublic(nu) });
+    } catch (e) {
+      console.error("[auth/google] error:", e?.stack || e);
+      return res.status(500).json({
+        ok: false,
+        success: false,
+        error: "server_error",
+        message: "Google sign-in failed",
+      });
     }
   });
 
