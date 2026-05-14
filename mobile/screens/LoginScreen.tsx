@@ -8,11 +8,8 @@ import { theme } from "../constants/theme";
 import { BACKEND_URL, apiFullUrl } from "../constants/config";
 import { useAuth } from "../services/authContext";
 import { EXPO_GO_GOOGLE_PROMPT_OPTIONS } from "../auth/expoGooglePromptOptions";
+import { getGoogleIdTokenAuthConfig } from "../auth/googleAuthRequestConfig";
 import { exchangeGoogleIdToken } from "../auth/googleBackendLogin";
-
-/** Google OAuth Web client ID for Expo Go proxy; override with `GOOGLE_EXPO_CLIENT_ID` in env if needed. */
-const WEB_CLIENT_ID_FALLBACK =
-  "959424837728-du1bihun3s9a353letjrdv4nb34tlsg7.apps.googleusercontent.com";
 
 const GOOGLE_REDIRECT_OPTIONS = {
   useProxy: true,
@@ -33,15 +30,13 @@ export default function LoginScreen({ navigation }: { navigation: any }) {
   const [password, setPassword] = React.useState("");
   const [busy, setBusy] = React.useState(false);
 
-  const expoClientId = process.env.GOOGLE_EXPO_CLIENT_ID?.trim() || WEB_CLIENT_ID_FALLBACK;
-  const googleConfigured =
-    Boolean(expoClientId) && expoClientId.endsWith(".apps.googleusercontent.com");
+  const googleAuthConfig = React.useMemo(() => getGoogleIdTokenAuthConfig(), []);
+  const googleConfigured = Boolean(
+    googleAuthConfig.webClientId?.endsWith(".apps.googleusercontent.com")
+  );
 
   const [request, response, promptAsync] = Google.useIdTokenAuthRequest(
-    {
-      expoClientId,
-      scopes: ["openid", "profile", "email"],
-    },
+    googleAuthConfig,
     GOOGLE_REDIRECT_OPTIONS
   );
 
