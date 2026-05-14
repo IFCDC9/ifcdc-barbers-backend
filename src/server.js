@@ -216,6 +216,23 @@ app.use((req, res, next) => {
   next()
 })
 
+/** One-line access log for every request (set IFCDC_REQUEST_LOG=0 to disable). */
+if (String(process.env.IFCDC_REQUEST_LOG ?? "1").trim() !== "0") {
+  app.use((req, res, next) => {
+    const started = Date.now()
+    res.on("finish", () => {
+      console.log(
+        "[http]",
+        res.statusCode,
+        req.method,
+        req.originalUrl || req.url,
+        `${Date.now() - started}ms`,
+      )
+    })
+    next()
+  })
+}
+
 /**
  * JSON bodies for all routes except `/api/*` (apiRouter uses its own parser + PayPal rawBody).
  * Hoist one parser instance — do not call express.json() per request.
@@ -451,6 +468,22 @@ app.get("/api/health/readiness", async (_req, res) => {
     voiceWebhookHint: publicBase ? `POST ${publicBase.replace(/\/$/, "")}/voice` : "Set PUBLIC_BASE_URL or deploy on Render",
   })
 })
+
+/**
+ * Mobile app booking checkout — mounted on `app` (not nested under `apiRouter` alone).
+ * Global `parseJsonExceptApi` skips JSON for all `/api/*`, so these POST routes need their own parser here.
+ */
+app.use(
+  "/api/app-bookings",
+  express.json({
+    limit: "512kb",
+    verify: (req, _res, buf) => {
+      req.rawBody = buf
+    },
+  }),
+  express.urlencoded({ extended: true }),
+  require(nodePath.join(__rootDir, "appBookingCheckoutRoutes.cjs")),
+)
 
 /** Local style photo uploads (when Supabase Storage is not configured). */
 app.use("/uploads", express.static(path.join(process.cwd(), "uploads")))
@@ -896,11 +929,11 @@ app.head("*", spaIndexFallback)
    SERVER START
 ========================================== */
 
-const PORT = Number(process.env.PORT) || 5050
+const PORT = Number(process.env.PORT) || 10000
 
 // Bind all interfaces so phones / LAN can reach the API (not localhost-only).
 server.listen(PORT, "0.0.0.0", () => {
-  console.log("Server running on port 5050")
+  console.log(`Server running on port ${PORT}`)
   console.log(`Backend running on http://0.0.0.0:${PORT}`)
   console.log(`Listening: http://0.0.0.0:${PORT} (network open)`)
   if (apiOnly) {
@@ -917,7 +950,7 @@ server.listen(PORT, "0.0.0.0", () => {
 server.on("error", (error) => {
   if (error.code === "EADDRINUSE") {
     console.error(`❌ Port ${PORT} is already in use.`)
-    console.error("Run: lsof -ti:5050 | xargs kill -9")
+    console.error(`Run: lsof -ti:${PORT} | xargs kill -9`)
     process.exit(1)
   }
 
@@ -974,7 +1007,7 @@ const shutdown = async (signal = "SIGTERM") => {
 
 /**
  * Nodemon’s default restart signal is SIGUSR2 (see nodemon defaults).
- * If we don’t close `server` here, the old process keeps port 5050 and the
+ * If we don’t close `server` here, the old process keeps the bound port and the
  * new child exits with EADDRINUSE — “[nodemon] app crashed”.
  */
 process.once("SIGUSR2", () => {

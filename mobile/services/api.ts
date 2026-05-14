@@ -1,36 +1,49 @@
-import { BACKEND_URL } from "../constants/config";
+import { apiFullUrl } from "../constants/config";
 import { getAuthToken } from "./authService";
+import { reportConnectionFailure, reportConnectionRecovered } from "./connectionAlerts";
 
 type ApiFetchOptions = RequestInit & { auth?: boolean };
 
+function shouldAlertOnHttpStatus(status: number): boolean {
+  return status >= 500 || status === 0;
+}
+
 export async function apiFetch(path: string, options: ApiFetchOptions = {}) {
-  if (!BACKEND_URL) {
-    throw new Error(
-      "API base URL is not configured. Set EXPO_PUBLIC_API_URL in mobile/.env to your Render backend URL."
-    );
-  }
-  const url = path.startsWith("http") ? path : `${BACKEND_URL}${path.startsWith("/") ? "" : "/"}${path}`;
+  const url = path.startsWith("http") ? path : apiFullUrl(path);
+  console.log("[apiFetch]", options.method || "GET", url);
   const headers = new Headers(options.headers || {});
 
   if (!headers.has("Content-Type") && options.body) {
     headers.set("Content-Type", "application/json");
   }
 
-  const auth = options.auth !== false; // default true
+  const auth = options.auth !== false;
   if (auth) {
-    const token = await getAuthToken();
-    if (token) headers.set("Authorization", `Bearer ${token}`);
+    try {
+      const token = await getAuthToken();
+      if (token) headers.set("Authorization", `Bearer ${token}`);
+    } catch (e) {
+      console.log("[api] getAuthToken failed (non-fatal):", e instanceof Error ? e.message : String(e));
+    }
   }
 
-  const res = await fetch(url, { ...options, headers });
+  let res: Response;
+  try {
+    res = await fetch(url, { ...options, headers });
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    console.log("[api] fetch threw", url, message);
+    reportConnectionFailure({ kind: "network", url, message });
+    throw new Error(`[api] network error ${url} — ${message}`);
+  }
 
   if (!res.ok) {
     let detail = "";
     try {
       const ct = res.headers.get("content-type") || "";
       if (ct.includes("application/json")) {
-        const j: any = await res.json();
-        detail = j?.error || j?.detail || JSON.stringify(j);
+        const j: Record<string, unknown> = await res.json();
+        detail = String(j?.error ?? j?.detail ?? JSON.stringify(j));
       } else {
         detail = await res.text();
       }
@@ -40,9 +53,12 @@ export async function apiFetch(path: string, options: ApiFetchOptions = {}) {
 
     const msg = `[api] ${res.status} ${res.statusText} ${url}${detail ? ` — ${detail}` : ""}`;
     console.log(msg);
+    if (shouldAlertOnHttpStatus(res.status)) {
+      reportConnectionFailure({ kind: "http", url, status: res.status, message: detail || res.statusText });
+    }
     throw new Error(msg);
   }
 
+  reportConnectionRecovered();
   return res;
 }
-

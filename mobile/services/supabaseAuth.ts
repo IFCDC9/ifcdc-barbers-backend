@@ -1,4 +1,4 @@
-import { BACKEND_URL } from "../constants/config";
+import { apiFullUrl } from "../constants/config";
 import { getSupabase } from "../lib/supabase";
 
 export type EnsureSupabaseAuthResult =
@@ -24,7 +24,7 @@ export async function ensureSupabaseAuth(appJwt: string | null): Promise<EnsureS
 
   if (appJwt) {
     try {
-      const res = await fetch(`${BACKEND_URL}/api/auth/supabase-bridge`, {
+      const res = await fetch(apiFullUrl("/api/auth/supabase-bridge"), {
         method: "POST",
         headers: {
           Authorization: `Bearer ${appJwt}`,

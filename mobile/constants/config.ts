@@ -1,23 +1,56 @@
 import Constants from "expo-constants";
-import * as Device from "expo-device";
 
-const extra =
-  (Constants.expoConfig?.extra ?? Constants.manifest?.extra ?? {}) as Record<string, unknown>;
+/**
+ * Production API default — `EXPO_PUBLIC_API_URL` / `EXPO_PUBLIC_BACKEND_URL` override when set (Metro/.env).
+ * (Supabase keys still use env / app.json extra when present.)
+ */
+export const PRODUCTION_API_BASE = "https://ifcdc-barbers-backend.onrender.com";
 
-const fromEnv =
-  typeof process !== "undefined" && (process.env.EXPO_PUBLIC_API_URL || process.env.EXPO_PUBLIC_BACKEND_URL)
-    ? String(process.env.EXPO_PUBLIC_API_URL || process.env.EXPO_PUBLIC_BACKEND_URL).trim()
-    : "";
-const fromExtra = String(extra.backendUrl ?? "").trim();
-
-let base = fromEnv || fromExtra;
-if (!base && typeof __DEV__ !== "undefined" && __DEV__) {
-  console.warn(
-    "[config] API base URL is not set. Set EXPO_PUBLIC_API_URL (recommended) or EXPO_PUBLIC_BACKEND_URL in mobile/.env."
+function looksLikeLocalhostApi(url: string): boolean {
+  const u = url.trim().toLowerCase();
+  return (
+    u.startsWith("http://localhost")
+    || u.startsWith("https://localhost")
+    || u.includes("127.0.0.1")
+    || u.includes("0.0.0.0")
+    || u.includes("ngrok-free.app")
+    || u.includes("ngrok.io")
   );
 }
 
-export const BACKEND_URL = base.replace(/\/$/, "");
+const apiBaseEnv =
+  typeof process !== "undefined"
+    ? String(process.env.EXPO_PUBLIC_API_URL || process.env.EXPO_PUBLIC_BACKEND_URL || "").trim()
+    : "";
+
+const resolvedBaseRaw = (apiBaseEnv || PRODUCTION_API_BASE).replace(/\/$/, "");
+
+/**
+ * API origin: env override when set, else production Render URL.
+ * In production builds, localhost/ngrok overrides are ignored so the app always hits Render.
+ */
+export const BACKEND_URL = (() => {
+  if (!__DEV__ && apiBaseEnv && looksLikeLocalhostApi(apiBaseEnv)) {
+    console.warn(
+      "[IFCDC] ignoring EXPO_PUBLIC_API_URL / EXPO_PUBLIC_BACKEND_URL (localhost or tunnel) in production build — using",
+      PRODUCTION_API_BASE,
+    );
+    return PRODUCTION_API_BASE.replace(/\/$/, "");
+  }
+  return resolvedBaseRaw;
+})();
+
+export const API_URL = BACKEND_URL;
+
+/** Absolute URL for a path beginning with `/` (single place for all REST calls). */
+export function apiFullUrl(path: string): string {
+  const p = path.startsWith("/") ? path : `/${path}`;
+  const base = BACKEND_URL.replace(/\/$/, "");
+  return `${base}${p}`;
+}
+
+const extra =
+  (Constants.expoConfig?.extra ?? Constants.manifest?.extra ?? {}) as Record<string, unknown>;
 
 const supabaseUrlEnv =
   typeof process !== "undefined" && process.env.EXPO_PUBLIC_SUPABASE_URL
@@ -56,4 +89,3 @@ const bucketExtra = String(extra.supabaseStorageBucket ?? "").trim();
 
 /** Must match server SUPABASE_STORAGE_BUCKET (default barber-styles). */
 export const SUPABASE_STORAGE_BUCKET = bucketEnv || bucketExtra || "barber-styles";
-

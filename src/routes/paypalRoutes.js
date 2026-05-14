@@ -142,6 +142,99 @@ const isPendingPayment = (apt) => {
   return status === "pending" || status === "pending_payment"
 }
 
+/**
+ * Hosted PayPal Smart Buttons page for React Native WebView (`mobile/app/(tabs)/payment.tsx`).
+ * GET /api/paypal/checkout?bookingId=&price=&backendUrl=
+ */
+router.get("/checkout", async (req, res) => {
+  try {
+    const bookingId = asId(req.query.bookingId)
+    const price = asPrice(req.query.price)
+    const configured =
+      String(process.env.PUBLIC_BASE_URL || "").replace(/\/$/, "").trim()
+      || `${req.protocol}://${req.get("host")}`
+    const backendUrl = String(req.query.backendUrl || configured || "").replace(/\/$/, "").trim()
+    const clientId = String(process.env.PAYPAL_CLIENT_ID || "").trim()
+
+    if (!bookingId || !price) {
+      return res.status(400).type("html")
+        .send("<!DOCTYPE html><html><head><meta charset=\"utf-8\"/><title>Checkout</title></head><body><p>Missing bookingId or price.</p></body></html>")
+    }
+    if (!clientId) {
+      return res.status(503).type("html")
+        .send("<!DOCTYPE html><html><head><meta charset=\"utf-8\"/><title>PayPal</title></head><body><p>PayPal is not configured on this server.</p></body></html>")
+    }
+
+    const cfg = JSON.stringify({ backendUrl, bookingId, price })
+    const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>IFCDC Pay</title>
+  <script src="https://www.paypal.com/sdk/js?client-id=${encodeURIComponent(clientId)}&currency=USD"></script>
+  <style>
+    body { font-family: system-ui, sans-serif; background:#0a0a0a; color:#eee; margin:0; padding:16px; }
+    #paypal-btn { max-width:420px; margin:24px auto; }
+    .err { color:#f66; margin-top:12px; white-space:pre-wrap; }
+  </style>
+</head>
+<body>
+  <h2 style="text-align:center">Complete payment</h2>
+  <div id="paypal-btn"></div>
+  <div id="msg" class="err"></div>
+  <script>
+    const CFG = ${cfg};
+    function post(obj) {
+      try {
+        if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify(obj));
+      } catch (e) {}
+    }
+    function show(m) { var el = document.getElementById("msg"); if (el) el.textContent = m; }
+    const API = CFG.backendUrl.replace(/\\/$/, "");
+    paypal.Buttons({
+      style: { layout: "vertical", color: "gold", shape: "rect", label: "pay" },
+      createOrder: async function() {
+        const r = await fetch(API + "/api/paypal/create-paypal-order", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Accept": "application/json" },
+          body: JSON.stringify({ bookingId: CFG.bookingId, price: CFG.price })
+        });
+        const j = await r.json().catch(function(){ return {}; });
+        if (!r.ok) throw new Error(j.message || j.error || ("HTTP " + r.status));
+        const id = j.id || j.orderID || j.orderId;
+        if (!id) throw new Error("No order id from server");
+        return id;
+      },
+      onApprove: async function(data) {
+        try {
+          const r = await fetch(API + "/api/paypal/capture-order", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "Accept": "application/json" },
+            body: JSON.stringify({ orderId: data.orderID, orderID: data.orderID, bookingId: CFG.bookingId })
+          });
+          const j = await r.json().catch(function(){ return {}; });
+          if (!r.ok || !j.ok) throw new Error(j.message || j.error || ("HTTP " + r.status));
+          post({ type: "PAYMENT_SUCCESS", bookingId: String(CFG.bookingId), orderId: data.orderID });
+        } catch (e) {
+          show(String(e && e.message ? e.message : e));
+          post({ type: "PAYMENT_ERROR", message: String(e && e.message ? e.message : e) });
+        }
+      },
+      onCancel: function() { post({ type: "PAYMENT_CANCELLED" }); },
+      onError: function(err) { show(err && err.message ? err.message : String(err)); post({ type: "PAYMENT_ERROR", message: String(err && err.message ? err.message : err) }); }
+    }).render("#paypal-btn");
+  </script>
+</body>
+</html>`
+    return res.type("html").send(html)
+  } catch (err) {
+    console.error("[paypal] checkout page:", err)
+    return res.status(500).type("html")
+      .send("<!DOCTYPE html><html><body><p>Checkout failed to load.</p></body></html>")
+  }
+})
+
 const sendConfirmationsBestEffort = async (apt) => {
   const phone = apt?.customer_phone || apt?.phone || null
   const email = apt?.email || null

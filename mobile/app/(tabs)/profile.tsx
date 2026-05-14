@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { Alert, StyleSheet, Text, View } from "react-native";
-import { BACKEND_URL } from "../../constants/config";
+import { BACKEND_URL, apiFullUrl } from "../../constants/config";
+import { reportConnectionFailure } from "../../services/connectionAlerts";
 import {
   registerForPushNotificationsAsync,
   triggerLocalTestNotificationAsync,
@@ -41,7 +42,7 @@ const ProfileScreen = () => {
       return;
     }
     try {
-      const res = await fetch(`${BACKEND_URL}/api/push/register`, {
+      const res = await fetch(apiFullUrl("/api/push/register"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ token: pushToken }),
@@ -49,7 +50,14 @@ const ProfileScreen = () => {
       const json = await res.json();
       Alert.alert("Backend", JSON.stringify(json));
     } catch (e) {
-      Alert.alert("Backend", e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      console.log("[profile] push register failed:", msg);
+      reportConnectionFailure({
+        kind: "network",
+        url: apiFullUrl("/api/push/register"),
+        message: msg,
+      });
+      Alert.alert("Backend", msg);
     }
   };
 

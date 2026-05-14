@@ -11,7 +11,8 @@ import {
   ScrollView,
 } from 'react-native';
 import { WebView, WebViewMessageEvent } from 'react-native-webview';
-import { BACKEND_URL } from '../../constants/config';
+import { BACKEND_URL, apiFullUrl } from '../../constants/config';
+import { reportConnectionFailure, reportConnectionRecovered } from '../../services/connectionAlerts';
 import CardContainer from '../../components/CardContainer';
 import GlowButton from '../../components/GlowButton';
 import { theme } from '../../constants/theme';
@@ -49,20 +50,20 @@ const PaymentScreen = ({
 
   const checkoutUrl = useMemo(() => {
     if (!bookingId) {
-      return null;
+      return "";
     }
-
     return (
-      `${BACKEND_URL}/api/paypal/checkout` +
+      `${apiFullUrl('/api/paypal/checkout')}` +
       `?bookingId=${bookingId}&price=${price}&backendUrl=${encodeURIComponent(BACKEND_URL)}`
     );
   }, [bookingId, price]);
 
   const createBooking = async () => {
+    let failureAlreadyReported = false;
     try {
       setIsCreatingBooking(true);
 
-      const response = await fetch(`${BACKEND_URL}/api/appointments`, {
+      const response = await fetch(apiFullUrl('/api/appointments'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -78,18 +79,42 @@ const PaymentScreen = ({
         }),
       });
 
-      const data = (await response.json()) as any;
+      let data: any = {};
+      try {
+        data = (await response.json()) as any;
+      } catch (parseErr) {
+        console.log("[payment] appointments JSON parse failed:", parseErr);
+        throw new Error("Server returned invalid response");
+      }
 
       const bookingId =
         data?.appointment?.id ??
         (typeof data?.booking === 'object' && data?.booking != null ? (data.booking as { id?: number }).id : undefined);
       if (!response.ok || bookingId == null) {
+        if (response.status >= 500) {
+          failureAlreadyReported = true;
+          reportConnectionFailure({
+            kind: 'http',
+            url: apiFullUrl("/api/appointments"),
+            status: response.status,
+            message: data?.message || data?.error,
+          });
+        }
         throw new Error(data?.message || data?.error || 'Booking creation failed');
       }
       setBookingId(String(bookingId));
       setCheckoutReady(true);
+      reportConnectionRecovered();
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Booking creation failed';
+      console.log('[payment] createBooking failed:', message);
+      if (!failureAlreadyReported) {
+        reportConnectionFailure({
+          kind: 'network',
+          url: apiFullUrl("/api/appointments"),
+          message,
+        });
+      }
       Alert.alert('Booking Failed', message);
     } finally {
       setIsCreatingBooking(false);
@@ -110,12 +135,18 @@ const PaymentScreen = ({
           // Production-grade: verify on backend before trusting success.
           (async () => {
             try {
-              const verifyRes = await fetch(`${BACKEND_URL}/api/paypal/verify`, {
+              const verifyRes = await fetch(apiFullUrl("/api/paypal/verify"), {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ bookingId: msg.bookingId, orderId: msg.orderId, expectedAmount: price }),
               });
-              const verifyJson = await verifyRes.json();
+              let verifyJson: Record<string, unknown> = {};
+              try {
+                verifyJson = (await verifyRes.json()) as Record<string, unknown>;
+              } catch (parseErr) {
+                console.log("[payment] verify JSON parse failed:", parseErr);
+                throw new Error("verification_parse_failed");
+              }
               if (!verifyRes.ok || !verifyJson?.ok) {
                 throw new Error(verifyJson?.error || verifyJson?.status || "verification_failed");
               }

@@ -5,7 +5,7 @@ import CardContainer from "../components/CardContainer";
 import GlowButton from "../components/GlowButton";
 import GoogleButton from "../components/GoogleButton";
 import { theme } from "../constants/theme";
-import { BACKEND_URL } from "../constants/config";
+import { BACKEND_URL, apiFullUrl } from "../constants/config";
 import { useAuth } from "../services/authContext";
 import { EXPO_GO_GOOGLE_PROMPT_OPTIONS } from "../auth/expoGooglePromptOptions";
 import { exchangeGoogleIdToken } from "../auth/googleBackendLogin";
@@ -46,64 +46,71 @@ export default function RegisterScreen({ navigation }: { navigation: any }) {
   }, [request]);
 
   React.useEffect(() => {
-    if (!response) return;
-    const p = (response as any).params || {};
-    console.log("[auth] Google response:", response.type, { hasIdToken: Boolean(p.id_token) });
+    if (!response) return undefined;
 
-    if (response.type === "error") {
-      const err = (response as any).error;
-      Alert.alert("Google sign-in", err ? String(err) : "Unknown OAuth error");
-      return;
-    }
+    try {
+      const p = (response as any).params || {};
+      console.log("[auth] Google response:", response.type, { hasIdToken: Boolean(p.id_token) });
 
-    if (response.type === "dismiss" || response.type === "cancel") {
-      return;
-    }
-
-    if (response.type !== "success") return;
-
-    const idToken =
-      (p.id_token as string | undefined)
-      || ((response as any)?.authentication?.idToken as string | undefined);
-
-    if (!idToken) {
-      Alert.alert(
-        "Google sign-in",
-        "No ID token returned. Ensure the Web OAuth client uses OpenID and you are signed in with useIdTokenAuthRequest (implicit id_token flow)."
-      );
-      return;
-    }
-
-    const ac = new AbortController();
-    (async () => {
-      try {
-        setBusy(true);
-        const responseData = await exchangeGoogleIdToken(BACKEND_URL, idToken, ac.signal);
-        const response = { data: responseData };
-        console.log("GOOGLE RESPONSE:", response.data);
-
-        if (responseData.token) {
-          await signInWithToken(responseData.token);
-          return;
-        }
-
-        if (responseData.user) {
-          Alert.alert(
-            "Google sign-in",
-            "Google verified your account, but the server did not return a JWT. Ensure POST /api/auth/google responds with a `token` field so the app can stay signed in."
-          );
-          return;
-        }
-
-        Alert.alert("Google sign-in", "Unexpected server response after Google sign-in.");
-      } catch (e) {
-        if ((e as Error)?.name === "AbortError") return;
-        Alert.alert("Google sign-in", e instanceof Error ? e.message : String(e));
-      } finally {
-        if (!ac.signal.aborted) setBusy(false);
+      if (response.type === "error") {
+        const err = (response as any).error;
+        Alert.alert("Google sign-in", err ? String(err) : "Unknown OAuth error");
+        return undefined;
       }
-    })();
-    return () => ac.abort();
+
+      if (response.type === "dismiss" || response.type === "cancel") {
+        return undefined;
+      }
+
+      if (response.type !== "success") return undefined;
+
+      const idToken =
+        (p.id_token as string | undefined)
+        || ((response as any)?.authentication?.idToken as string | undefined);
+
+      if (!idToken) {
+        Alert.alert(
+          "Google sign-in",
+          "No ID token returned. Ensure the Web OAuth client uses OpenID and you are signed in with useIdTokenAuthRequest (implicit id_token flow)."
+        );
+        return undefined;
+      }
+
+      const ac = new AbortController();
+      (async () => {
+        try {
+          setBusy(true);
+          const responseData = await exchangeGoogleIdToken(BACKEND_URL, idToken, ac.signal);
+          const wrapped = { data: responseData };
+          console.log("GOOGLE RESPONSE:", wrapped.data);
+
+          if (responseData.token) {
+            await signInWithToken(responseData.token);
+            return;
+          }
+
+          if (responseData.user) {
+            Alert.alert(
+              "Google sign-in",
+              "Google verified your account, but the server did not return a JWT. Ensure POST /api/auth/google responds with a `token` field so the app can stay signed in."
+            );
+            return;
+          }
+
+          Alert.alert("Google sign-in", "Unexpected server response after Google sign-in.");
+        } catch (e) {
+          if ((e as Error)?.name === "AbortError") return;
+          console.log("[register] Google exchange failed:", e instanceof Error ? e.message : String(e));
+          Alert.alert("Google sign-in", e instanceof Error ? e.message : String(e));
+        } finally {
+          if (!ac.signal.aborted) setBusy(false);
+        }
+      })();
+      return () => ac.abort();
+    } catch (e) {
+      console.log("[register] Google response handler error:", e instanceof Error ? e.message : String(e));
+      return undefined;
+    }
   }, [response, signInWithToken]);
 
   const startGoogle = async () => {
@@ -119,12 +126,19 @@ export default function RegisterScreen({ navigation }: { navigation: any }) {
   const register = async () => {
     try {
       setBusy(true);
-      const res = await fetch(`${BACKEND_URL}/api/auth/register`, {
+      const res = await fetch(apiFullUrl("/api/auth/register"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ fullName: fullName.trim(), email: email.trim(), password }),
       });
-      const json = (await res.json()) as { ok?: boolean; token?: string; error?: string };
+      const raw = await res.text();
+      let json: { ok?: boolean; token?: string; error?: string } = {};
+      try {
+        json = raw ? (JSON.parse(raw) as typeof json) : {};
+      } catch (parseErr) {
+        console.log("[register] JSON parse failed:", parseErr);
+        throw new Error("Server returned invalid response");
+      }
       if (!res.ok || !json?.ok || !json?.token) throw new Error(json?.error || "register_failed");
       await signInWithToken(json.token);
     } catch (e) {
