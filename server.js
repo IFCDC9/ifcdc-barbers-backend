@@ -50,17 +50,43 @@ function stripOuterQuotes(s) {
 
 console.log("ENV CHECK:");
 console.log("PUBLIC_API_URL =", process.env.PUBLIC_API_URL ?? "(undefined)");
+console.log("PUBLIC_BASE_URL =", process.env.PUBLIC_BASE_URL ?? "(undefined)");
+console.log("RENDER_EXTERNAL_URL =", process.env.RENDER_EXTERNAL_URL ?? "(undefined)");
 
-const rawPublic = stripOuterQuotes(process.env.PUBLIC_API_URL);
-if (!rawPublic) {
-  console.error("❌ PUBLIC_API_URL NOT LOADED");
+/**
+ * Public HTTPS origin for Twilio webhooks and absolute links (no trailing slash).
+ * Render sets RENDER_EXTERNAL_URL; many dashboards use PUBLIC_BASE_URL instead.
+ */
+function resolvePublicApiBase() {
+  const candidates = [
+    ["PUBLIC_API_URL", process.env.PUBLIC_API_URL],
+    ["PUBLIC_BASE_URL", process.env.PUBLIC_BASE_URL],
+    ["RENDER_EXTERNAL_URL", process.env.RENDER_EXTERNAL_URL],
+    ["TWILIO_PUBLIC_BASE_URL", process.env.TWILIO_PUBLIC_BASE_URL],
+  ];
+  for (const [name, raw] of candidates) {
+    const v = stripOuterQuotes(raw);
+    if (!v) continue;
+    const base = v.replace(/\/$/, "");
+    if (base) return { base, source: name };
+  }
+  return { base: "", source: null };
+}
+
+const { base: BASE_URL, source: publicBaseSource } = resolvePublicApiBase();
+if (!BASE_URL) {
+  console.error("❌ PUBLIC_API_URL NOT LOADED (no public base URL resolved)");
+  console.error(
+    "Set one of: PUBLIC_API_URL, PUBLIC_BASE_URL, RENDER_EXTERNAL_URL (automatic on Render), or TWILIO_PUBLIC_BASE_URL — https URL, no trailing slash.",
+  );
   process.exit(1);
 }
 
-/** Voice Twilio callbacks — single public origin (no trailing slash). */
-const BASE_URL = stripOuterQuotes(process.env.PUBLIC_API_URL).replace(/\/$/, "");
 process.env.PUBLIC_API_URL = BASE_URL;
-console.log("✅ AURA BASE URL:", BASE_URL);
+if (!stripOuterQuotes(process.env.PUBLIC_BASE_URL)) {
+  process.env.PUBLIC_BASE_URL = BASE_URL;
+}
+console.log(`✅ AURA BASE URL (${publicBaseSource}):`, BASE_URL);
 
 const twilioMsSid = stripOuterQuotes(process.env.TWILIO_MESSAGING_SERVICE_SID || "").replace(/\s/g, "");
 process.env.TWILIO_MESSAGING_SERVICE_SID = twilioMsSid;
