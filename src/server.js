@@ -243,6 +243,41 @@ app.use((req, res, next) => {
   return parseJsonExceptApi(req, res, next)
 })
 
+/** Mobile app-bookings — mount immediately after global parsers (before other routes / catch-alls). */
+let appBookingCheckoutRouter
+try {
+  appBookingCheckoutRouter = require(nodePath.join(__rootDir, "appBookingCheckoutRoutes.cjs"))
+  console.log("[boot] loaded appBookingCheckoutRoutes.cjs")
+} catch (err) {
+  console.error(
+    "[boot] FAILED to require appBookingCheckoutRoutes.cjs:",
+    err instanceof Error ? err.message : String(err),
+  )
+  appBookingCheckoutRouter = express.Router()
+  appBookingCheckoutRouter.get("/health", (_req, res) => {
+    res.status(503).json({ ok: false, error: "app_bookings_router_load_failed" })
+  })
+}
+
+app.get("/api/app-bookings/health", (_req, res) => {
+  res.set("Cache-Control", "no-store")
+  res.json({ ok: true })
+})
+
+app.use(
+  "/api/app-bookings",
+  express.json({
+    limit: "512kb",
+    verify: (req, _res, buf) => {
+      req.rawBody = buf
+    },
+  }),
+  express.urlencoded({ extended: true }),
+  appBookingCheckoutRouter,
+)
+
+console.log("[boot] mounted GET /api/app-bookings/health + USE /api/app-bookings/*")
+
 /**
  * Root probe — JSON so browsers, curl, and uptime checks get a stable 200 (runs before SPA catch-all).
  * Matches legacy production shape for clients that already parse this payload.
@@ -468,22 +503,6 @@ app.get("/api/health/readiness", async (_req, res) => {
     voiceWebhookHint: publicBase ? `POST ${publicBase.replace(/\/$/, "")}/voice` : "Set PUBLIC_BASE_URL or deploy on Render",
   })
 })
-
-/**
- * Mobile app booking checkout — mounted on `app` (not nested under `apiRouter` alone).
- * Global `parseJsonExceptApi` skips JSON for all `/api/*`, so these POST routes need their own parser here.
- */
-app.use(
-  "/api/app-bookings",
-  express.json({
-    limit: "512kb",
-    verify: (req, _res, buf) => {
-      req.rawBody = buf
-    },
-  }),
-  express.urlencoded({ extended: true }),
-  require(nodePath.join(__rootDir, "appBookingCheckoutRoutes.cjs")),
-)
 
 /** Local style photo uploads (when Supabase Storage is not configured). */
 app.use("/uploads", express.static(path.join(process.cwd(), "uploads")))
@@ -910,6 +929,10 @@ function spaIndexFallback(req, res, next) {
   /** Belt-and-suspenders: if route order regresses, still return probes (not index.html). */
   if (p === "/health") return res.json({ status: "ok" })
   if (p === "/test") return res.json({ success: true })
+  if (p === "/api/app-bookings/health") {
+    res.set("Cache-Control", "no-store")
+    return res.json({ ok: true })
+  }
   if (p === "/voice") {
     res.type("text/xml")
     return res.send(VOICE_TWIML_WELCOME.trim())
@@ -933,6 +956,29 @@ const PORT = Number(process.env.PORT) || 10000
 
 // Bind all interfaces so phones / LAN can reach the API (not localhost-only).
 server.listen(PORT, "0.0.0.0", () => {
+  try {
+    const stack = app?._router?.stack
+    if (Array.isArray(stack)) {
+      const summary = stack
+        .map((layer) => {
+          if (layer?.route?.path != null) {
+            const m = layer.route.methods || {}
+            const verbs = Object.keys(m)
+              .filter((k) => m[k])
+              .join(",")
+              .toUpperCase()
+            return `${verbs} ${layer.route.path}`
+          }
+          if (layer?.name === "router") return "USE<Router>"
+          return layer?.name ? `mw:${layer.name}` : "mw"
+        })
+        .filter(Boolean)
+      console.log("[boot] Express stack (trimmed):", summary.slice(0, 100).join(" | "))
+    }
+  } catch (e) {
+    console.warn("[boot] route stack log skipped:", e instanceof Error ? e.message : String(e))
+  }
+
   console.log(`Server running on port ${PORT}`)
   console.log(`Backend running on http://0.0.0.0:${PORT}`)
   console.log(`Listening: http://0.0.0.0:${PORT} (network open)`)

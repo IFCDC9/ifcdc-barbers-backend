@@ -195,6 +195,7 @@ const {
 const { handlePaypalWebhookEvent } = require("./paypalWebhookEmail.cjs");
 const { logResendStatus } = require("./bookingEmail.cjs");
 const paypalPaymentRoutes = require("./paypalPaymentRoutes.cjs");
+const appBookingCheckoutRoutes = require("./appBookingCheckoutRoutes.cjs");
 
 logResendProductionEnv();
 logResendStatus();
@@ -247,6 +248,14 @@ app.set("trust proxy", 1);
 app.use(cors({ origin: "*" }));
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
+
+/** Mobile app bookings — must register before the 404 handler (and any future catch-alls). */
+app.get("/api/app-bookings/health", (_req, res) => {
+  res.set("Cache-Control", "no-store");
+  res.json({ ok: true });
+});
+app.use("/api/app-bookings", appBookingCheckoutRoutes);
+console.log("[boot] mounted GET /api/app-bookings/health + USE /api/app-bookings");
 
 app.post("/api/sms/status", (req, res) => {
   console.log("📬 DELIVERY UPDATE:", req.body);
@@ -731,6 +740,28 @@ async function startServer() {
     await paypalPaymentRoutes.probePayPalOAuthAndLog();
   }
   const server = app.listen(PORT, "0.0.0.0", () => {
+    try {
+      const stack = app?._router?.stack;
+      if (Array.isArray(stack)) {
+        const summary = stack
+          .map((layer) => {
+            if (layer?.route?.path != null) {
+              const m = layer.route.methods || {};
+              const verbs = Object.keys(m)
+                .filter((k) => m[k])
+                .join(",")
+                .toUpperCase();
+              return `${verbs} ${layer.route.path}`;
+            }
+            if (layer?.name === "router") return "USE<Router>";
+            return layer?.name ? `mw:${layer.name}` : "mw";
+          })
+          .filter(Boolean);
+        console.log("[boot] Express stack (trimmed):", summary.slice(0, 120).join(" | "));
+      }
+    } catch (e) {
+      console.warn("[boot] route stack log skipped:", e instanceof Error ? e.message : String(e));
+    }
     console.log("🚀 Backend running on port:", PORT);
   });
 
