@@ -1,0 +1,71 @@
+When EAS Submit shows "no error payload" and Expo never attaches log file URLs,
+the cloud submitter still may have failed. You can upload the same binary to
+App Store Connect using one of these supported paths.
+
+----------------------------------------------------------------------
+0) Log says: "Failed to download the archive file: https://expo.dev/artifacts/…"
+----------------------------------------------------------------------
+
+That URL is the **IPA stored on Expo’s CDN**. The submit worker could not fetch it,
+almost always because:
+
+  • The **artifact link expired** (common if you submit an **old** build), or
+  • You are re-submitting a build whose IPA was **already removed / rotated**.
+
+**Fix:** run a **new** iOS production build, then submit **right away**:
+
+  cd mobile
+  npm run eas:build:ios:auto-submit
+
+That builds and then submits in one flow so the IPA URL is fresh (uses the
+`production` submit profile from eas.json).
+
+Or: new build only, then immediately:
+
+  npm run eas:ipa:url
+  npx eas-cli submit -p ios -e production --url "<fresh URL from script>"
+
+Or: download the IPA to your Mac and use `--path` or Apple Transporter (below);
+local upload does not depend on Expo’s worker downloading the URL again.
+
+----------------------------------------------------------------------
+A) Submit the IPA URL directly (no download) — fastest
+----------------------------------------------------------------------
+
+1) Print the latest finished store IPA URL:
+
+   cd mobile
+   npm run eas:ipa:url
+
+2) Run the printed command, e.g.:
+
+   npx eas-cli submit -p ios -e production --url "https://expo.dev/artifacts/eas/....ipa"
+
+Uses the same App Store Connect API key configured in Expo credentials.
+
+----------------------------------------------------------------------
+B) Download IPA, then eas submit --path
+----------------------------------------------------------------------
+
+   curl -L -o IFCDC-Barbers.ipa "<URL from npm run eas:ipa:url>"
+   npx eas-cli submit -p ios -e production --path ./IFCDC-Barbers.ipa
+
+----------------------------------------------------------------------
+C) Apple Transporter (official GUI)
+----------------------------------------------------------------------
+
+1) npm run eas:ipa:url  → copy IPA URL
+2) curl -L -o IFCDC-Barbers.ipa "<URL>"
+3) Open "Transporter" from the Mac App Store
+4) Sign in with your Apple ID (same team as the app)
+5) Drag IFCDC-Barbers.ipa into Transporter → Deliver
+
+----------------------------------------------------------------------
+Still failing?
+----------------------------------------------------------------------
+
+- App Store Connect → Agreements, Tax, and Banking (accept all).
+- Ensure the .ipa is a **store** distribution build (production profile).
+- Duplicate build: bump iOS build number (EAS autoIncrement) and rebuild.
+- Expo submission page (while logged in) may still show the only full log:
+  https://expo.dev/accounts/<account>/projects/<slug>/submissions/<id>

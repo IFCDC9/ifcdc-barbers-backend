@@ -1,0 +1,36 @@
+Reading your Expo iOS submission log
+=====================================
+
+Example URL (must be logged into Expo as ifcdc696):
+  https://expo.dev/accounts/ifcdc696/projects/ifcdc-barbers/submissions/ac897af4-1cbb-4cc4-9078-00031d381273
+
+Automated tools cannot read this page without your browser session.
+
+Steps:
+1. Cmd+click the URL while signed in to Expo.
+2. Scroll to the failed step (often fastlane / Transporter / altool).
+3. Copy the last error block — that text is what to fix next.
+
+Note: eas-cli is patched (patch-package). When status becomes Errored, the CLI
+keeps the spinner on "fetching diagnostic logs" and polls Expo for up to ~3
+minutes before showing the final failure line, so log URLs can attach first.
+Then Fastlane logs print as [logs] lines when available. Submit scripts use
+--verbose and --verbose-fastlane. Run npm install in mobile/ so the patch applies.
+
+If Expo never attaches log URLs, upload the same IPA anyway — see:
+  mobile/docs/IOS_APP_STORE_UPLOAD_FALLBACK.txt
+Quick:  cd mobile && npm run eas:ipa:url
+Then run the printed  eas submit --url "..."  command.
+
+Common errors and actions:
+- Missing compliance / export → App Store Connect → App Privacy / compliance; app.json sets ITSAppUsesNonExemptEncryption false.
+- Missing purpose strings (NSPhotoLibrary…, NSMicrophone…) → rebuild after app.json changes (this repo adds expo-image-picker plugin + plist strings).
+- Agreement / paid apps → App Store Connect → Agreements, Tax, and Banking — accept all.
+- Redundant binary / duplicate build → new eas iOS build (new build number), then eas submit --latest.
+- Invalid icon → assets/icon.png stays 1024×1024 opaque PNG (no alpha).
+- 401 / API key → fix App Store Connect API key in Expo credentials.
+
+After changing app.json or plugins, run a new production iOS build then submit:
+  cd mobile
+  npm run eas:build:ios
+  npm run eas:submit:ios:latest

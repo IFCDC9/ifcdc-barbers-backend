@@ -12,8 +12,8 @@ import { loadBarberDepositPricingOpts } from "./barberScope.js";
  */
 export async function computeStyleBookingBreakdown({ styleId, barberId, paymentType, body = {} }) {
   const sid = String(styleId || "").trim();
-  const bid = Number(barberId);
-  if (!sid || !Number.isFinite(bid)) {
+  const bidRaw = barberId;
+  if (!sid || bidRaw == null || String(bidRaw).trim() === "") {
     return { ok: false, status: 400, error: "invalid_input", message: "styleId and barberId required" };
   }
 
@@ -25,7 +25,7 @@ export async function computeStyleBookingBreakdown({ styleId, barberId, paymentT
   if (!style) {
     return { ok: false, status: 404, error: "style_not_found", message: "Style not found" };
   }
-  if (Number(style.barber_id) !== bid) {
+  if (String(style.barber_id) !== String(bidRaw)) {
     return {
       ok: false,
       status: 400,
@@ -39,7 +39,7 @@ export async function computeStyleBookingBreakdown({ styleId, barberId, paymentT
     return { ok: false, status: 400, error: "invalid_style_price", message: "Style has no valid price" };
   }
 
-  const depositOpts = await loadBarberDepositPricingOpts(bid);
+  const depositOpts = await loadBarberDepositPricingOpts(bidRaw);
   let pt = String(paymentType || "full").toLowerCase() === "deposit" ? "deposit" : "full";
   if (pt === "deposit" && !depositsAllowedForBooking(depositOpts)) pt = "full";
 
@@ -50,7 +50,7 @@ export async function computeStyleBookingBreakdown({ styleId, barberId, paymentT
     styleId: String(style.id),
     styleTitle: String(style.title || "").trim() || "Style",
     styleImageUrl: style.image_url ? String(style.image_url) : null,
-    barberId: bid,
+    barberId: bidRaw,
     subscription_tier: depositOpts.subscriptionTier,
     breakdown,
   };

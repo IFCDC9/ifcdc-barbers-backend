@@ -41,6 +41,42 @@ export function auraStructuredIntentFromKeywords(message, lang = "en") {
     };
   }
 
+  if (/\b(directions?|address|location|where are you|how do i get|maps?|parking)\b/.test(s)) {
+    console.log("AURA INTENT:", "DIRECTIONS");
+    return {
+      matched: true,
+      intent: "DIRECTIONS",
+      action: "NONE",
+      reply: voiceIntentReply(L, "DIRECTIONS"),
+    };
+  }
+
+  if (/\b(hours?|open|close|closing|when do you open|what time do you)\b/.test(s)) {
+    console.log("AURA INTENT:", "HOURS");
+    return {
+      matched: true,
+      intent: "HOURS",
+      action: "NONE",
+      reply: voiceIntentReply(L, "HOURS"),
+    };
+  }
+
+  if (
+    /\b(services?|what do you offer|what cuts)\b/.test(s) &&
+    !/\b(book|booking|appointments?|schedule|reserve)\b/.test(s)
+  ) {
+    console.log("AURA INTENT:", "SERVICES");
+    return {
+      matched: true,
+      intent: "SERVICES",
+      action: "NAVIGATE_STYLES",
+      reply:
+        L === "es"
+          ? "Ofrecemos cortes, fades, barba y más. Abra Estilos en la app para ver la carta completa, o diga reservar corte cuando esté listo."
+          : "We offer haircuts, fades, beard trims, and more. Open Styles in the app for the full menu, or say book a haircut when you're ready.",
+    };
+  }
+
   // Book: haircut, cut, book, appointment, need/want/get a cut
   if (
     /\b(book|booking|appointments?|schedule|reserve|reservation)\b/.test(s) ||

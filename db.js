@@ -41,6 +41,7 @@ export function getDbPool() {
     connectionString,
     ssl: { rejectUnauthorized: false },
     max: Number(process.env.PG_POOL_MAX || 2),
+    connectionTimeoutMillis: Number(process.env.PG_CONNECT_TIMEOUT_MS || 12_000),
   });
   return pool;
 }

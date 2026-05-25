@@ -4,17 +4,42 @@
     "slug": "ifcdc-barbers",
     "version": "1.0.0",
     "orientation": "portrait",
-    "userInterfaceStyle": "light",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
     "assetBundlePatterns": [
       "**/*"
     ],
     "scheme": "ifcdc-barbers",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "cover",
+      "backgroundColor": "#050505"
+    },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.ifcdc.barbers"
+      "bundleIdentifier": "com.ifcdc.barbers",
+      "infoPlist": {
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": false,
+          "NSExceptionDomains": {
+            "localhost": {
+              "NSExceptionAllowsInsecureHTTPLoads": true,
+              "NSIncludesSubdomains": true
+            },
+            "127.0.0.1": {
+              "NSExceptionAllowsInsecureHTTPLoads": true
+            }
+          }
+        }
+      }
     },
     "android": {
-      "package": "com.ifcdc.barbers"
+      "package": "com.ifcdc.barbers",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#050505"
+      },
+      "usesCleartextTraffic": true
     },
     "plugins": [
       "expo-secure-store"

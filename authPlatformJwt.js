@@ -40,6 +40,8 @@ export function publicUserFromAppUser(user) {
     id: user.id,
     name: user.full_name ?? user.name,
     email: user.email,
+    phone: user.phone ?? null,
+    profileImageUrl: user.profile_image_url ?? user.profileImageUrl ?? null,
     role: c.role,
     barberId: user.barber_id ?? user.barberId ?? null,
     businessId: c.businessId,

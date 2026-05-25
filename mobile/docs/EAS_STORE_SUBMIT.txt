@@ -1,0 +1,55 @@
+Store submission uses EAS, not `expo submit`.
+
+Wrong (Expo CLI treats "submit" as a folder name → Invalid project root):
+  npx expo submit -p ios
+
+Right (from mobile/):
+  npm run eas:submit:ios
+  npm run eas:submit:android
+
+Or directly:
+  npx eas-cli submit -p ios -e production
+  npx eas-cli submit -p android -e production
+
+Use --latest to pick the latest finished build, or --id <BUILD_ID> for a specific one.
+
+--------------------------------------------------
+If you see: "Something went wrong when submitting to App Store Connect"
+--------------------------------------------------
+
+That text only means the submission job status is "Errored" on Expo — the real
+reason is in the submission log on the web (Fastlane / Transporter output).
+
+1) Open the "Submission details" URL printed after "Scheduled iOS submission".
+
+2) Read the error at the bottom of the log (e.g. missing compliance, invalid
+   icon, Apple agreement not signed, TestFlight processing failure).
+
+3) In App Store Connect, check:
+   - Agreements, Tax, and Banking (accept any pending agreements).
+   - Your app → TestFlight / Activity — processing errors for the build.
+   - App Privacy questionnaire completed if required.
+   - Export compliance: app.json already sets ITSAppUsesNonExemptEncryption false
+     for standard HTTPS-only apps; if Apple still asks, answer in ASC.
+
+4) eas.json submit.production.ios now includes ascAppId + appleTeamId so submit
+   skips flaky app-lookup steps (values from your last successful login).
+
+5) Retry from mobile/:
+     npm run eas:submit:ios
+   For more local detail:
+     npm run eas:submit:ios:verbose
+
+6) Avoid staring at a failed spinner: schedule submit and open the log yourself:
+     npm run eas:submit:ios:latest:nowait
+   Then open the printed "Submission details" URL — the job keeps running on Expo
+   even if you press Ctrl+C locally.
+
+7) If the Expo log says duplicate / redundant binary / build already exists:
+   run a NEW iOS store build (bumps build number), then:
+     npm run eas:submit:ios:latest
+
+8) eas.json build.production uses "distribution": "store" so iOS artifacts are
+   always App Store–signed (not ad hoc internal).
+
+Do not use: npx expo submit … (invalid — see top of this file).

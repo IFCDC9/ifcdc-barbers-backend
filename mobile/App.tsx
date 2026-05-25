@@ -1,17 +1,28 @@
 import React from "react";
 import * as WebBrowser from "expo-web-browser";
 import { LogBox, View } from "react-native";
+import { SafeAreaProvider } from "react-native-safe-area-context";
 
 import { NavigationContainer } from "@react-navigation/native";
 import { createStackNavigator } from "@react-navigation/stack";
 import Tabs from "./app/_layout";
-import { addNotificationListeners } from "./services/notificationService";
-import AIFloatingButton from "./components/AIFloatingButton";
-import AIAssistantSheet from "./components/AIAssistantSheet";
+import {
+  addNotificationListeners,
+  registerForPushNotificationsAsync,
+} from "./services/notificationService";
+import { registerPushToken } from "./services/pushApi";
 import { AuthProvider, useAuth } from "./services/authContext";
-import AdminDashboardScreen from "./screens/AdminDashboardScreen";
 import LoginScreen from "./screens/LoginScreen";
 import RegisterScreen from "./screens/RegisterScreen";
+import LegalPoliciesIndexScreen from "./screens/legal/LegalPoliciesIndexScreen";
+import PrivacyPolicyScreen from "./screens/legal/PrivacyPolicyScreen";
+import TermsConditionsScreen from "./screens/legal/TermsConditionsScreen";
+import CancellationPolicyScreen from "./screens/legal/CancellationPolicyScreen";
+import PlatformFeeDisclosureScreen from "./screens/legal/PlatformFeeDisclosureScreen";
+import AuraDisclosureScreen from "./screens/legal/AuraDisclosureScreen";
+import BarberTermsScreen from "./screens/legal/BarberTermsScreen";
+import NotificationConsentScreen from "./screens/legal/NotificationConsentScreen";
+import SecurityNoticeScreen from "./screens/legal/SecurityNoticeScreen";
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -23,8 +34,7 @@ LogBox.ignoreLogs([
 const Stack = createStackNavigator();
 
 function RootNav() {
-  const { loading, token, sessionKind } = useAuth();
-  const [aiOpen, setAiOpen] = React.useState(false);
+  const { loading, token } = useAuth();
 
   React.useEffect(() => {
     const remove = addNotificationListeners({
@@ -38,6 +48,29 @@ function RootNav() {
     return remove;
   }, []);
 
+  // Register the device's Expo push token with the backend whenever the user
+  // is signed in. Best-effort — never blocks navigation or shows errors. If
+  // permission isn't granted, this is a no-op (the user can re-enable from
+  // Notifications settings later).
+  React.useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const state = await registerForPushNotificationsAsync();
+        if (cancelled) return;
+        if (state.expoPushToken) {
+          await registerPushToken(state.expoPushToken);
+        }
+      } catch {
+        /* swallowed — push registration must never block sign-in */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
+
   if (loading) {
     return <View style={{ flex: 1, backgroundColor: "#050505" }} />;
   }
@@ -47,39 +80,38 @@ function RootNav() {
       <NavigationContainer>
         <Stack.Navigator
           screenOptions={{ headerShown: false }}
-          initialRouteName={token && sessionKind === "owner" ? "Admin" : token ? "App" : "Login"}
+          initialRouteName={token ? "App" : "Login"}
         >
           {token ? (
-            <>
-              {sessionKind === "owner" ? (
-                <Stack.Screen name="Admin" component={AdminDashboardScreen} />
-              ) : null}
-              <Stack.Screen name="App" component={Tabs} />
-            </>
+            <Stack.Screen name="App" component={Tabs} />
           ) : (
             <>
               <Stack.Screen name="Login" component={LoginScreen} />
               <Stack.Screen name="Register" component={RegisterScreen} />
+              <Stack.Screen name="LegalPolicies" component={LegalPoliciesIndexScreen} />
+              <Stack.Screen name="PrivacyPolicy" component={PrivacyPolicyScreen} />
+              <Stack.Screen name="TermsConditions" component={TermsConditionsScreen} />
+              <Stack.Screen name="CancellationPolicy" component={CancellationPolicyScreen} />
+              <Stack.Screen name="PlatformFeeDisclosure" component={PlatformFeeDisclosureScreen} />
+              <Stack.Screen name="AuraDisclosure" component={AuraDisclosureScreen} />
+              <Stack.Screen name="BarberTerms" component={BarberTermsScreen} />
+              <Stack.Screen name="NotificationConsent" component={NotificationConsentScreen} />
+              <Stack.Screen name="SecurityNotice" component={SecurityNoticeScreen} />
             </>
           )}
         </Stack.Navigator>
       </NavigationContainer>
-
-      {token ? (
-        <>
-          <AIFloatingButton onPress={() => setAiOpen(true)} />
-          <AIAssistantSheet visible={aiOpen} onClose={() => setAiOpen(false)} />
-        </>
-      ) : null}
     </View>
   );
 }
 
 export default function App() {
   return (
-    <AuthProvider>
-      <RootNav />
-    </AuthProvider>
+    <SafeAreaProvider>
+      <AuthProvider>
+        <RootNav />
+      </AuthProvider>
+    </SafeAreaProvider>
   );
 }
 

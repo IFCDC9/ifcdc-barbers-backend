@@ -9,10 +9,11 @@ import {
   TextInput,
   View,
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { theme } from "../constants/theme";
 import CardContainer from "./CardContainer";
 import GlowButton from "./GlowButton";
-import { apiFetch } from "../services/api";
+import { sendAuraChatMessage, type AuraChatMessage } from "../services/auraChatApi";
 
 type Msg = {
   id: string;
@@ -26,6 +27,7 @@ type Props = {
 };
 
 export default function AIAssistantSheet({ visible, onClose }: Props) {
+  const insets = useSafeAreaInsets();
   const [conversationId] = useState(() => `ai-${Date.now()}`);
   const [messages, setMessages] = useState<Msg[]>([]);
   const [text, setText] = useState("");
@@ -63,28 +65,24 @@ export default function AIAssistantSheet({ visible, onClose }: Props) {
     if (!trimmed || sending) return;
 
     const userMsg: Msg = { id: `u-${Date.now()}`, role: "user", content: trimmed };
+    const nextThread: AuraChatMessage[] = [...messages, userMsg].map((m) => ({
+      role: m.role,
+      content: m.content,
+    }));
+
     setMessages((prev) => [...prev, userMsg]);
     setText("");
     setSending(true);
 
-    try {
-      const res = await apiFetch("/api/ai/chat", {
-        method: "POST",
-        auth: false,
-        body: JSON.stringify({ conversationId, message: trimmed }),
-      });
-      const json = (await res.json()) as { reply?: string };
-      const reply = String(json?.reply || "Sorry — I couldn’t respond. Try again.");
-      setMessages((prev) => [...prev, { id: `a-${Date.now()}`, role: "assistant", content: reply }]);
-    } catch {
-      setMessages((prev) => [
-        ...prev,
-        { id: `a-${Date.now()}`, role: "assistant", content: "AI is unavailable right now. Please try again." },
-      ]);
-    } finally {
-      setSending(false);
-      setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 50);
-    }
+    const { reply } = await sendAuraChatMessage({
+      message: trimmed,
+      conversationId,
+      messages: nextThread,
+    });
+
+    setMessages((prev) => [...prev, { id: `a-${Date.now()}`, role: "assistant", content: reply }]);
+    setSending(false);
+    setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 50);
   };
 
   const renderItem = ({ item }: { item: Msg }) => {
@@ -104,12 +102,14 @@ export default function AIAssistantSheet({ visible, onClose }: Props) {
         <Pressable style={StyleSheet.absoluteFill} onPress={close} />
       </Animated.View>
 
-      <Animated.View style={[styles.sheetWrap, { transform: [{ translateY }] }]}>
+      <Animated.View
+        style={[styles.sheetWrap, { bottom: insets.bottom + 88, transform: [{ translateY }] }]}
+      >
         <CardContainer glow style={styles.sheet}>
           <View style={styles.headerRow}>
-            <View>
-              <Text style={styles.title}>AURA Assistant</Text>
-              <Text style={styles.subtitle}>Book appointments, get recommendations, and more.</Text>
+            <View style={styles.headerText}>
+              <Text style={styles.title}>AURA</Text>
+              <Text style={styles.subtitle}>Text chat — bookings, services, and shop info</Text>
             </View>
             <Pressable onPress={close} style={styles.closeBtn} hitSlop={10}>
               <Text style={styles.closeText}>✕</Text>
@@ -123,10 +123,15 @@ export default function AIAssistantSheet({ visible, onClose }: Props) {
             renderItem={renderItem}
             contentContainerStyle={styles.list}
             ListEmptyComponent={
-              <Text style={styles.emptyHint}>
-                Ask AURA to help you book, compare services, or answer shop questions. Messages stay in this session
-                only.
-              </Text>
+              <View style={styles.welcomeBox}>
+                <Text style={styles.welcomeTitle}>Ask AURA</Text>
+                <Text style={styles.emptyHint}>
+                  AURA is here to help with bookings, services, and shop questions.
+                </Text>
+                <Text style={styles.welcomeFoot}>
+                  Type a message below — text chat only for now.
+                </Text>
+              </View>
             }
             onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: true })}
           />
@@ -135,24 +140,14 @@ export default function AIAssistantSheet({ visible, onClose }: Props) {
             <TextInput
               value={text}
               onChangeText={setText}
-              placeholder="Ask the AI…"
+              placeholder="Ask AURA…"
               placeholderTextColor="rgba(255,255,255,0.45)"
               style={styles.input}
               editable={!sending}
               returnKeyType="send"
               onSubmitEditing={send}
             />
-            <View style={styles.actions}>
-              <GlowButton
-                label="🎙"
-                onPress={() => {}}
-                variant="outline"
-                disabled
-                style={{ width: 54 }}
-                textStyle={{ fontSize: 16 }}
-              />
-              <GlowButton label="Send" onPress={send} disabled={!canSend} loading={sending} style={{ flex: 1 }} />
-            </View>
+            <GlowButton label="Send" onPress={send} disabled={!canSend} loading={sending} />
           </View>
         </CardContainer>
       </Animated.View>
@@ -169,8 +164,9 @@ const styles = StyleSheet.create({
     position: "absolute",
     left: 16,
     right: 16,
-    bottom: 16,
+    bottom: 24,
   },
+  headerText: { flex: 1, paddingRight: 8 },
   sheet: {
     padding: 16,
     maxHeight: "78%",
@@ -196,12 +192,27 @@ const styles = StyleSheet.create({
   },
   closeText: { color: theme.colors.textMuted, fontWeight: "800" },
   list: { gap: 10, paddingVertical: 8, paddingBottom: 12, flexGrow: 1 },
-  emptyHint: {
-    color: theme.colors.textMuted,
-    fontSize: 14,
-    lineHeight: 20,
+  welcomeBox: {
     paddingVertical: 12,
     paddingHorizontal: 4,
+    gap: 8,
+  },
+  welcomeTitle: {
+    color: theme.colors.gold,
+    fontSize: 16,
+    fontWeight: "800",
+    letterSpacing: 0.5,
+  },
+  emptyHint: {
+    color: theme.colors.text,
+    fontSize: 15,
+    lineHeight: 22,
+    fontWeight: "500",
+  },
+  welcomeFoot: {
+    color: theme.colors.textMuted,
+    fontSize: 13,
+    lineHeight: 18,
   },
   bubble: {
     maxWidth: "88%",
@@ -234,6 +245,5 @@ const styles = StyleSheet.create({
     color: theme.colors.text,
     fontSize: 14,
   },
-  actions: { flexDirection: "row", gap: 10, marginTop: 10 },
 });
 

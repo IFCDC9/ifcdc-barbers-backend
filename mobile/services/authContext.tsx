@@ -1,15 +1,20 @@
 import React from "react";
 import { signOutSupabase } from "../lib/supabase";
 import { decodeJwtPayload, isOwnerAdminDashboardPayload } from "../auth/jwtSession";
-import { getAuthMe } from "../auth/authSessionApi";
+import { getAuthMe, type JsonAuth } from "../auth/authSessionApi";
 import { getAuthToken, setAuthToken } from "./authService";
+import { isSuperAdminUser } from "../utils/adminAccess";
 
 export type SessionKind = "owner" | "default";
+
+export type AppUser = NonNullable<JsonAuth["user"]>;
 
 type AuthContextValue = {
   loading: boolean;
   token: string | null;
+  user: AppUser | null;
   sessionKind: SessionKind;
+  isPlatformAdmin: boolean;
   signInWithToken: (token: string) => Promise<void>;
   signOut: () => Promise<void>;
   refresh: () => Promise<void>;
@@ -32,15 +37,21 @@ export function useAuth() {
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = React.useState(true);
   const [token, setToken] = React.useState<string | null>(null);
+  const [user, setUser] = React.useState<AppUser | null>(null);
   const [sessionKind, setSessionKind] = React.useState<SessionKind>("default");
+
+  const applySession = React.useCallback((t: string | null, u: AppUser | null) => {
+    setToken(t);
+    setUser(u);
+    setSessionKind(tokenToSessionKind(t));
+  }, []);
 
   const refresh = React.useCallback(async () => {
     setLoading(true);
     try {
       const t = await getAuthToken();
       if (!t) {
-        setToken(null);
-        setSessionKind("default");
+        applySession(null, null);
         return;
       }
       const me = await getAuthMe(t, 15_000);
@@ -48,33 +59,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (me.status === 401 || me.status === 403) {
           console.warn("[auth] stored session rejected; clearing token", { status: me.status, url: me.url });
           await setAuthToken(null);
-          setToken(null);
-          setSessionKind("default");
+          applySession(null, null);
           return;
         }
         if (me.status === 404) {
           console.warn("[auth] GET /api/auth/me missing on server — using JWT until API is deployed", { url: me.url });
-          setToken(t);
-          setSessionKind(tokenToSessionKind(t));
+          applySession(t, null);
           return;
         }
         if (me.status === 0) {
           console.warn("[auth] /me unreachable (network/timeout); keeping cached JWT", { url: me.url });
-          setToken(t);
-          setSessionKind(tokenToSessionKind(t));
+          applySession(t, null);
           return;
         }
         console.warn("[auth] /me unexpected status; keeping cached JWT", { status: me.status, url: me.url });
-        setToken(t);
-        setSessionKind(tokenToSessionKind(t));
+        applySession(t, null);
         return;
       }
-      setToken(t);
-      setSessionKind(tokenToSessionKind(t));
+      applySession(t, me.json.user ?? null);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [applySession]);
 
   React.useEffect(() => {
     refresh();
@@ -83,8 +89,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const signInWithToken = React.useCallback(async (t: string) => {
     try {
       await setAuthToken(t);
-      setToken(t);
-      setSessionKind(tokenToSessionKind(t));
+      const me = await getAuthMe(t, 15_000);
+      applySession(t, me.ok ? me.json.user ?? null : null);
     } catch (e) {
       const raw = e instanceof Error ? e.message : String(e);
       console.error("[auth] SecureStore setItemAsync failed:", raw);
@@ -94,15 +100,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           : "Token save failed. Try again, restart the app, or check device storage / Screen Time restrictions.";
       throw new Error(hint);
     }
-  }, []);
+  }, [applySession]);
 
   const signOut = React.useCallback(async () => {
     await signOutSupabase();
     await setAuthToken(null);
-    setToken(null);
-    setSessionKind("default");
-  }, []);
+    applySession(null, null);
+  }, [applySession]);
 
-  const value: AuthContextValue = { loading, token, sessionKind, signInWithToken, signOut, refresh };
+  const isPlatformAdmin = isSuperAdminUser(user, token);
+
+  const value: AuthContextValue = {
+    loading,
+    token,
+    user,
+    sessionKind,
+    isPlatformAdmin,
+    signInWithToken,
+    signOut,
+    refresh,
+  };
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

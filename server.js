@@ -11,15 +11,22 @@ import express from "express";
 import session from "express-session";
 import { mountMinimalIfcdcApi } from "./minimalIfcdcApi.js";
 import { createAuthRouter, resolveAuthPayload } from "./authRoutes.js";
-import { ensureUsersRoleColumn, ensureGoogleAuthSupport } from "./authDbMigrations.js";
+import { ensureUsersRoleColumn, ensureGoogleAuthSupport, ensurePendingInvitesTable, ensurePasswordRecoveryColumns } from "./authDbMigrations.js";
 import { ensureInitialSuperAdmin } from "./seedSuperAdmin.js";
 import { ensureStylesTables, seedSampleStylesIfEmpty } from "./stylesMigrations.js";
 import { createStylesRouter } from "./stylesRoutes.js";
 import { ensureBookingsTable } from "./bookingsMigrations.js";
 import { ensureBarberBusinessTables } from "./barberBusinessMigrations.js";
+import { ensureBookingStatusHistoryTable } from "./bookingStatusEngine.js";
+import { ensurePushNotificationsSchema } from "./pushNotificationsMigrations.js";
+import { createNotificationRouter } from "./notificationRoutes.js";
+import { ensureLegalAcceptanceSchema } from "./legalAcceptanceMigrations.js";
+import { createLegalRouter } from "./legalRoutes.js";
 import { createBarberBusinessRouter } from "./barberBusinessRoutes.js";
+import { handleBarberAvailableSlotsGet } from "./barberAvailableSlotsRoute.js";
 import { createBookingsRouter, insertAuraVoiceBookingRow } from "./bookingsRoutes.js";
 import { createBookingsAdminGuard } from "./bookingsAdminGuard.js";
+import { createAdminUsersRouter } from "./adminUsersRoutes.js";
 import { dbQuery } from "./db.js";
 import { ensureSecurityAuditTable, ensureSecurityTenantColumns } from "./securityTenantMigrations.js";
 import {
@@ -119,7 +126,9 @@ console.log(
   process.env.PAYPAL_CLIENT_ID ? "PAYPAL_CLIENT_ID=set" : "PAYPAL_CLIENT_ID=missing",
   process.env.PAYPAL_CLIENT_SECRET || process.env.PAYPAL_SECRET
     ? "PAYPAL_CLIENT_SECRET/PAYPAL_SECRET=set"
-    : "secret=missing"
+    : "secret=missing",
+  "PAYPAL_ENV=",
+  process.env.PAYPAL_ENV || process.env.PAYPAL_MODE || "(default sandbox)",
 );
 console.log(
   "BUSINESS_PHONE:",
@@ -133,9 +142,16 @@ console.log(
 );
 
 const AURA_ASSISTANT_PROMPT =
-  "You are AURA, an intelligent assistant for a barbershop booking app. Your job is to help users book appointments, view styles, understand pricing, and guide them to take action. Be short, clear, and helpful.";
+  "You are AURA, the intelligent text assistant for IFCDC Barbers. Help customers with shop hours, location, haircut services, booking appointments, pricing guidance, and appointment questions. Be concise, warm, and professional. Guide users to the Book tab to schedule. Never mention internal errors or API details.";
 
-const AURA_FAILSAFE_REPLY = "I'm having trouble right now, try again.";
+const AURA_FAILSAFE_REPLY =
+  "AURA is temporarily reconnecting. Please try again in a moment.";
+
+/** Standard JSON body for all AURA chat routes. */
+function auraChatJson(reply, action = "NONE") {
+  const message = String(reply || AURA_FAILSAFE_REPLY).trim();
+  return { success: true, message, reply: message, action };
+}
 
 /** JSON for GET /api/aura/status (no secrets). */
 function auraStatusPayload() {
@@ -160,7 +176,8 @@ function auraStatusPayload() {
       processUrl: !wiz && pub ? `${pub}/api/aura/process` : null,
     },
     chat: {
-      path: "/api/aura",
+      paths: ["/api/aura", "/api/aura/chat", "/api/ai/chat"],
+      path: "/api/aura/chat",
       openai: Boolean(String(process.env.OPENAI_API_KEY || "").trim()),
       freeTierBypass: String(process.env.AURA_ALLOW_FREE_TIER_CHAT || "").trim() === "1",
     },
@@ -189,6 +206,7 @@ function auraLastUserText(body) {
 }
 
 async function auraOpenAiChat({ apiKey, model, systemPrompt, thread }) {
+  console.log("[aura/chat] OpenAI request sent", { model, turns: thread.length });
   const r = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -206,9 +224,10 @@ async function auraOpenAiChat({ apiKey, model, systemPrompt, thread }) {
   const reply = data.choices?.[0]?.message?.content?.trim();
   if (!r.ok || !reply) {
     const errMsg = data.error?.message || `OpenAI HTTP ${r.status}`;
-    console.error("[aura] OpenAI error:", errMsg);
+    console.error("[aura/chat] OpenAI response error:", errMsg);
     return { ok: false, reply: AURA_FAILSAFE_REPLY };
   }
+  console.log("[aura/chat] OpenAI response received", { chars: reply.length });
   return { ok: true, reply };
 }
 
@@ -312,10 +331,62 @@ console.log("[boot] mounted /api/auth", summarizeAuthRouterPaths(authRouter).joi
 /** Mobile app bookings — must register before the 404 handler (and any future catch-alls). */
 app.get("/api/app-bookings/health", (_req, res) => {
   res.set("Cache-Control", "no-store");
-  res.json({ ok: true });
+  const envRaw = String(process.env.PAYPAL_ENV || process.env.PAYPAL_MODE || "").toLowerCase();
+  const isLive = envRaw === "live" || envRaw === "production" || envRaw === "prod";
+  res.json({
+    ok: true,
+    paypal: {
+      environment: isLive ? "live" : "sandbox",
+      apiBase: isLive ? "https://api-m.paypal.com" : "https://api-m.sandbox.paypal.com",
+      clientIdSet: Boolean(String(process.env.PAYPAL_CLIENT_ID || "").trim()),
+      secretSet: Boolean(String(process.env.PAYPAL_CLIENT_SECRET || process.env.PAYPAL_SECRET || "").trim()),
+      PAYPAL_ENV: process.env.PAYPAL_ENV || null,
+      PAYPAL_MODE: process.env.PAYPAL_MODE || null,
+    },
+  });
 });
+
+const {
+  handlePublicBarberServicesGet,
+  handlePublicBarbersListGet,
+} = require("./bookingPublicHandlers.cjs");
+
+/** Public booking catalog — register before app-bookings router (no auth). */
+app.get("/api/app-bookings/services", async (req, res) => {
+  try {
+    return await handlePublicBarberServicesGet(req, res, dbQuery);
+  } catch (e) {
+    console.error("[services] GET /api/app-bookings/services:", e?.message || e);
+    return res.status(500).json({ error: "server_error", message: "Failed to load services" });
+  }
+});
+
+app.get("/api/app-bookings/barbers", async (req, res) => {
+  try {
+    return await handlePublicBarbersListGet(req, res, dbQuery);
+  } catch (e) {
+    console.error("[app-bookings] GET /api/app-bookings/barbers:", e?.message || e);
+    return res.status(500).json({ ok: false, error: "barbers_failed", message: e?.message || String(e) });
+  }
+});
+
 app.use("/api/app-bookings", appBookingCheckoutRoutes);
-console.log("[boot] mounted GET /api/app-bookings/health + USE /api/app-bookings");
+console.log("[boot] mounted public GET /api/app-bookings/services|barbers|health + USE /api/app-bookings");
+
+/** Public bookable services — no auth; authenticated management uses barber-business router. */
+app.get("/api/barber/services", async (req, res, next) => {
+  if (req.headers.authorization || req.headers.Authorization) return next();
+  try {
+    return await handlePublicBarberServicesGet(req, res, dbQuery);
+  } catch (e) {
+    console.error("[services] GET /api/barber/services:", e?.message || e);
+    return res.status(500).json({ error: "server_error", message: "Failed to load services" });
+  }
+});
+console.log("[boot] mounted public GET /api/barber/services (no auth)");
+
+app.get("/api/barber/available-slots", handleBarberAvailableSlotsGet);
+console.log("[boot] mounted GET /api/barber/available-slots");
 
 app.post("/api/sms/status", (req, res) => {
   console.log("📬 DELIVERY UPDATE:", req.body);
@@ -463,12 +534,36 @@ app.use("/styles", stylesRouter);
 
 const requireBookingsAdmin = createBookingsAdminGuard({ resolveAuthPayload, dbQuery });
 
+// Push notifications — Expo only (no SMS, no Twilio, no AURA).
+const pushNotifier = require("./pushNotifier.cjs");
+app.use(
+  "/api/notifications",
+  createNotificationRouter({
+    sendPushToUsers: pushNotifier.sendPushToUsers,
+    isExpoPushToken: pushNotifier.isExpoPushToken,
+  }),
+);
+console.log(
+  "[boot] mounted /api/notifications (register-token, preferences, test)",
+);
+
+// Legal & compliance acceptance log (App Store / Play Store readiness).
+app.use("/api/legal", createLegalRouter());
+console.log("[boot] mounted /api/legal (accept, status)");
+
 // Production bookings (Postgres) — replaces in-memory bookingRoutesMinimal.cjs for live payments.
 const bookingsRouter = createBookingsRouter({
   sendBookingEmail: require("./bookingEmail.cjs").sendBookingEmail,
+  sendBookingPush: pushNotifier.sendBookingPush,
   requireAdmin: requireBookingsAdmin,
 });
 app.use(bookingsRouter);
+
+const adminUsersRouter = createAdminUsersRouter({ sendEmail });
+app.use(adminUsersRouter);
+console.log(
+  "[admin] routes mounted: invite, audit, password-reset (POST /api/admin/send-password-reset, POST /api/admin/reset-password, PUT /api/admin/force-password-change)",
+);
 
 const barberBusinessUploadDir = path.join(__dirname, "backend", "uploads");
 app.use(createBarberBusinessRouter({ uploadDir: barberBusinessUploadDir }));
@@ -619,10 +714,16 @@ app.get("/api/config", (_req, res) => {
 });
 
 /**
- * POST /api/aura — AURA assistant. Body: { message } and/or { messages } (chat history).
- * Response: { reply: string, action: "NAVIGATE_BOOK" | "NAVIGATE_STYLES" | "NONE" }
+ * POST /api/aura | /api/aura/chat | /api/ai/chat — AURA text assistant.
+ * Response: { success: true, message, reply, action }
  */
-app.post("/api/aura", async (req, res) => {
+async function handleAuraChatRequest(req, res) {
+  console.log("[aura/chat] request received", {
+    path: req.path,
+    ip: req.ip,
+    hasMessage: Boolean(String(req.body?.message || "").trim()),
+    historyLen: Array.isArray(req.body?.messages) ? req.body.messages.length : 0,
+  });
   try {
     const { message, messages } = req.body || {};
     let thread = [];
@@ -639,7 +740,9 @@ app.post("/api/aura", async (req, res) => {
     if (thread.length === 0) {
       const m = String(message || "").trim();
       if (!m) {
-        return res.status(400).json({ error: "message required", reply: AURA_FAILSAFE_REPLY, action: "NONE" });
+        return res.status(200).json(
+          auraChatJson("Tell me what you need — booking, hours, services, or directions."),
+        );
       }
       thread = [{ role: "user", content: m }];
     }
@@ -659,8 +762,8 @@ app.post("/api/aura", async (req, res) => {
             L0 === "es"
               ? "AURA no está disponible en el plan Free. Actualiza a Pro o Elite para activar el asistente."
               : "AURA is not available on the Free plan. Upgrade to Pro or Elite to enable the assistant.";
-          return res.status(403).json({
-            error: "plan_limited",
+          return res.status(200).json({
+            success: true,
             message: reply,
             reply,
             action: "NONE",
@@ -668,19 +771,16 @@ app.post("/api/aura", async (req, res) => {
           });
         }
       } catch (e) {
-        console.warn("[aura] barber settings:", e?.message || e);
+        console.warn("[aura/chat] barber settings:", e?.message || e);
       }
     }
     const L = normalizeBarberLang(barberLang);
 
     const kw = auraStructuredIntentFromKeywords(lastUser, L);
     if (kw.matched) {
-      console.log("AURA INTENT:", kw.intent);
+      console.log("[aura/chat] keyword intent:", kw.intent);
       if (kw.intent === "NAVIGATE_BOOK") {
-        return res.json({
-          reply: auraChatNavigateBook(L),
-          action: "NAVIGATE_BOOK",
-        });
+        return res.json(auraChatJson(auraChatNavigateBook(L), "NAVIGATE_BOOK"));
       }
       if (kw.intent === "NAVIGATE_STYLES") {
         let extra = "";
@@ -693,19 +793,16 @@ app.post("/api/aura", async (req, res) => {
                 : ` Styles we offer include: ${titles.join(", ")}.`;
           }
         } catch (e) {
-          console.warn("[aura] style list:", e?.message || e);
+          console.warn("[aura/chat] style list:", e?.message || e);
         }
         const opener = L === "es" ? "Listo — abriendo estilos ahora." : "I got you — opening styles now.";
-        return res.json({
-          reply: `${opener}${extra}${auraChatNavigateStylesSuffix(L)}`,
-          action: "NAVIGATE_STYLES",
-        });
+        return res.json(
+          auraChatJson(`${opener}${extra}${auraChatNavigateStylesSuffix(L)}`, "NAVIGATE_STYLES"),
+        );
       }
-      if (kw.intent === "PRICING") {
-        return res.json({
-          reply: kw.reply,
-          action: "NAVIGATE_STYLES",
-        });
+      if (kw.intent === "PRICING" || kw.intent === "HOURS" || kw.intent === "DIRECTIONS" || kw.intent === "SERVICES") {
+        const action = kw.intent === "PRICING" || kw.intent === "SERVICES" ? "NAVIGATE_STYLES" : "NONE";
+        return res.json(auraChatJson(kw.reply, action));
       }
     }
 
@@ -717,15 +814,13 @@ app.post("/api/aura", async (req, res) => {
       wordCount <= 2 ||
       /\b(help|what can you do|options|ayuda|qu[eé] puedes hacer|opci[oó]nes)\b/i.test(cleaned)
     ) {
-      return res.json({ reply: auraUnclearFallbackReply(L), action: "NONE" });
+      return res.json(auraChatJson(auraUnclearFallbackReply(L)));
     }
 
     const apiKey = String(process.env.OPENAI_API_KEY || "").trim();
     if (!apiKey) {
-      return res.status(200).json({
-        reply: auraKeywordFallbackReply(L),
-        action: "NONE",
-      });
+      console.warn("[aura/chat] OPENAI_API_KEY missing — using keyword fallback");
+      return res.status(200).json(auraChatJson(auraKeywordFallbackReply(L)));
     }
 
     const model = String(process.env.OPENAI_MODEL || "gpt-4o-mini").trim();
@@ -745,12 +840,18 @@ app.post("/api/aura", async (req, res) => {
         ? "\n\nSi quiere, diga: reservar, estilos o precios — y lo llevo."
         : "\n\nIf you want, tell me: book, styles, or pricing — and I’ll take you there.";
     const reply = base + (/\b(book|booking|appointment)\b/i.test(base) ? "" : navigateHint);
-    return res.json({ reply, action: "NONE" });
+    return res.json(auraChatJson(reply));
   } catch (e) {
-    console.error("[aura]", e?.stack || e);
-    res.status(200).json({ reply: AURA_FAILSAFE_REPLY, action: "NONE" });
+    console.error("[aura/chat] route failure:", e?.stack || e);
+    return res.status(200).json(auraChatJson(AURA_FAILSAFE_REPLY));
   }
-});
+}
+
+const AURA_CHAT_PATHS = ["/api/aura", "/api/aura/chat", "/api/ai/chat"];
+for (const auraPath of AURA_CHAT_PATHS) {
+  app.post(auraPath, handleAuraChatRequest);
+}
+console.log("[boot] mounted POST", AURA_CHAT_PATHS.join(" | "));
 
 app.use((req, res) => {
   res.status(404).json({
@@ -765,6 +866,8 @@ async function startServer() {
   try {
     await ensureUsersRoleColumn();
     await ensureGoogleAuthSupport();
+    await ensurePendingInvitesTable();
+    await ensurePasswordRecoveryColumns();
   } catch (e) {
     console.error("[migrate] app_users/role failed:", e?.message || e);
   }
@@ -778,6 +881,9 @@ async function startServer() {
     await ensureBookingsTable();
     await ensureSecurityAuditTable();
     await ensureSecurityTenantColumns();
+    await ensureBookingStatusHistoryTable();
+    await ensurePushNotificationsSchema();
+    await ensureLegalAcceptanceSchema();
   } catch (e) {
     console.error("[migrate] bookings failed:", e?.message || e);
   }

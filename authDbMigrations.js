@@ -19,6 +19,10 @@ export async function ensureUsersRoleColumn() {
 
   await dbQuery(`ALTER TABLE app_users ADD COLUMN IF NOT EXISTS barber_id BIGINT;`);
   await dbQuery(`ALTER TABLE app_users ADD COLUMN IF NOT EXISTS business_id BIGINT;`);
+  await dbQuery(`ALTER TABLE app_users ADD COLUMN IF NOT EXISTS phone TEXT;`);
+  await dbQuery(`ALTER TABLE app_users ADD COLUMN IF NOT EXISTS profile_image_url TEXT;`);
+  await dbQuery(`ALTER TABLE app_users ADD COLUMN IF NOT EXISTS account_status TEXT DEFAULT 'active';`);
+  await dbQuery(`UPDATE app_users SET account_status = 'active' WHERE account_status IS NULL;`);
 
   // Enforce allowed values via CHECK constraint (idempotent).
   await dbQuery(`
@@ -42,6 +46,47 @@ export async function ensureUsersRoleColumn() {
   await dbQuery(
     `CREATE INDEX IF NOT EXISTS app_users_business_id_idx ON app_users (business_id) WHERE business_id IS NOT NULL;`,
   );
+}
+
+/** Admin onboarding invites — pending users until they accept and complete signup. */
+export async function ensurePendingInvitesTable() {
+  await dbQuery(`CREATE EXTENSION IF NOT EXISTS pgcrypto;`);
+  await dbQuery(`
+    CREATE TABLE IF NOT EXISTS pending_user_invites (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      invite_token TEXT NOT NULL UNIQUE,
+      email VARCHAR(255) NOT NULL,
+      name VARCHAR(255) NOT NULL,
+      phone TEXT,
+      role VARCHAR NOT NULL DEFAULT 'user',
+      business_id BIGINT,
+      welcome_note TEXT,
+      status VARCHAR NOT NULL DEFAULT 'pending',
+      onboarding_state VARCHAR NOT NULL DEFAULT 'invite_pending',
+      send_email BOOLEAN NOT NULL DEFAULT true,
+      send_sms BOOLEAN NOT NULL DEFAULT false,
+      invited_by UUID,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      sent_at TIMESTAMPTZ,
+      revoked_at TIMESTAMPTZ
+    );
+  `);
+  await dbQuery(`
+    CREATE INDEX IF NOT EXISTS pending_user_invites_email_idx
+    ON pending_user_invites (lower(trim(email)));
+  `);
+  await dbQuery(`
+    CREATE INDEX IF NOT EXISTS pending_user_invites_status_idx
+    ON pending_user_invites (status);
+  `);
+}
+
+/** Admin password recovery flags on app_users. */
+export async function ensurePasswordRecoveryColumns() {
+  await dbQuery(`ALTER TABLE app_users ADD COLUMN IF NOT EXISTS reset_token_hash TEXT;`);
+  await dbQuery(`ALTER TABLE app_users ADD COLUMN IF NOT EXISTS reset_token_expires_at TIMESTAMPTZ;`);
+  await dbQuery(`ALTER TABLE app_users ADD COLUMN IF NOT EXISTS force_password_change BOOLEAN DEFAULT false;`);
+  await dbQuery(`UPDATE app_users SET force_password_change = false WHERE force_password_change IS NULL;`);
 }
 
 /** Google Sign-In: stable link on `app_users` (Postgres). Safe to run every boot. */

@@ -1,4 +1,5 @@
 import { apiFullUrl, BACKEND_URL } from "../constants/config";
+import { UX } from "../utils/uxCopy";
 
 export type JsonAuth = {
   ok?: boolean;
@@ -6,7 +7,10 @@ export type JsonAuth = {
   token?: string;
   user?: {
     id?: string;
+    name?: string;
     email?: string;
+    phone?: string | null;
+    profileImageUrl?: string | null;
     role?: string;
     isOwner?: boolean;
     isSuperAdmin?: boolean;
@@ -20,7 +24,7 @@ export type JsonAuth = {
   detail?: string;
 };
 
-const DEFAULT_AUTH_TIMEOUT_MS = 28_000;
+const DEFAULT_AUTH_TIMEOUT_MS = 20_000;
 
 function clip(s: string, max: number) {
   const t = String(s || "");
@@ -60,7 +64,7 @@ export function mapAuthErrorToMessage(json: JsonAuth | null, status: number): st
   const detail = String(json?.detail || "").trim();
 
   if (status === 0 || Number.isNaN(status)) {
-    return "API unreachable. Check your internet connection and that EXPO_PUBLIC_API_URL points to the live backend.";
+    return UX.errorConnection;
   }
 
   if (code === "user_not_found") return msg || "No account exists for this email.";
@@ -72,10 +76,10 @@ export function mapAuthErrorToMessage(json: JsonAuth | null, status: number): st
   if (code === "invalid_role") return msg || "Choose a valid account type.";
 
   if (code === "google_oauth_not_configured") {
-    return "Google sign-in is not configured on the server (missing GOOGLE_CLIENT_ID). Ask an admin to add the Web OAuth client ID on Render.";
+    return "Google sign-in is not available right now. Please sign in with email or contact support.";
   }
   if (code === "google_audience_mismatch") {
-    return msg || "Google client ID does not match the server. Set GOOGLE_CLIENT_ID to your Web OAuth client ID.";
+    return msg || "Google sign-in could not be verified. Please try again.";
   }
   if (code === "google_token_invalid") return msg || "Google could not verify this sign-in. Try again.";
   if (code === "google_verify_unreachable") return msg || "Could not reach Google. Check your connection.";
@@ -87,10 +91,10 @@ export function mapAuthErrorToMessage(json: JsonAuth | null, status: number): st
   if (code === "weak_password") return msg || "Password is too weak.";
   if (code === "name_required") return msg || "Name is required.";
 
-  if (status >= 500) return msg || `Server error (${status}). Try again in a moment.`;
+  if (status >= 500) return msg || UX.errorGeneric;
   if (msg) return detail ? `${msg} ${detail}` : msg;
   if (detail) return detail;
-  return `Sign-in failed (${status}).`;
+  return UX.errorGeneric;
 }
 
 export async function postAuthJson(
@@ -116,9 +120,7 @@ export async function postAuthJson(
     const m = e instanceof Error ? e.message : String(e);
     if (name === "AbortError") {
       console.error("[auth] FAIL", { method: "POST", url, status: "TIMEOUT", responseCode: 0, message: m });
-      throw new Error(
-        `Request timed out after ${Math.round(timeoutMs / 1000)}s. Endpoint: ${url}`,
-      );
+      throw new Error(UX.errorConnection);
     }
     console.error("[auth] FAIL", { method: "POST", url, status: "NETWORK", responseCode: 0, message: m });
     throw new Error(mapAuthErrorToMessage(null, 0));
@@ -138,7 +140,7 @@ export async function postAuthJson(
       responseCode: res.status,
       body: clip(raw, 400),
     });
-    throw new Error(`Server returned non-JSON (HTTP ${res.status}). ${clip(raw, 240)}`);
+    throw new Error(UX.errorGeneric);
   }
 
   if (!loginResponseSucceeded(res.status, json)) {
@@ -164,13 +166,32 @@ export async function loginWithEmailPassword(email: string, password: string) {
 
 export type RegisterAccountType = "customer" | "barber" | "shop_owner";
 
+export type SignupAcceptanceItem = {
+  docKey: string;
+  docVersion: string;
+  accepted: boolean;
+};
+
+export type RegisterExtras = {
+  acceptances?: SignupAcceptanceItem[];
+  appVersion?: string;
+  platform?: string;
+};
+
 export async function registerWithEmailPassword(
   name: string,
   email: string,
   password: string,
   accountType: RegisterAccountType = "customer",
+  extras: RegisterExtras = {},
 ) {
-  const { json, status } = await postAuthJson("/api/auth/register", { name, email, password, accountType });
+  const body: Record<string, unknown> = { name, email, password, accountType };
+  if (Array.isArray(extras.acceptances) && extras.acceptances.length > 0) {
+    body.acceptances = extras.acceptances;
+  }
+  if (extras.appVersion) body.appVersion = extras.appVersion;
+  if (extras.platform) body.platform = extras.platform;
+  const { json, status } = await postAuthJson("/api/auth/register", body);
   if (loginResponseSucceeded(status, json)) {
     return { token: String(json.token).trim(), json };
   }

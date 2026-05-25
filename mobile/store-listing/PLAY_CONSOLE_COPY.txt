@@ -1,0 +1,59 @@
+IFCDC Barbers — Google Play Console copy (paste into Main store listing)
+================================================================================
+
+App name
+--------
+IFCDC Barbers
+
+Short description (max 80 chars — verify in Console)
+------------------------------------------------------
+Book barbers instantly. Powered by AURA AI.
+
+Full description
+----------------
+IFCDC Barbers is a next-generation booking platform built for modern barbershops.
+
+Book appointments, manage schedules, and connect with clients—fast and seamlessly.
+
+Features:
+• Smart booking with real-time availability
+• Barber profiles with services and pricing
+• Secure, streamlined checkout
+• AURA AI assistant for instant support
+
+Built for barbers. Designed for growth. Powered by IFCDC.
+
+Category
+--------
+Beauty
+
+Tags / keywords (for your own ASO notes; Play uses category + description)
+---------------------------------------------------------------------------
+Beauty, Business, Scheduling, Booking, Lifestyle
+
+Screenshot captions (set per screenshot in Console)
+-----------------------------------------------------
+1. All-in-one barber platform
+2. Book in seconds
+3. Choose your barber
+4. Simple, secure payments
+5. AURA — AI booking assistant
+
+Release notes (Production → Create release)
+--------------------------------------------
+Initial release of IFCDC Barbers
+
+================================================================================
+Assets in this folder (upload these)
+- icon-512.png       → App icon (512×512)
+- feature-graphic.png → Feature graphic (1024×500)
+
+Screenshots: capture from a real device or emulator (dark theme, gold accents).
+Navigate in the app:
+• Home / Explore tab — hero + booking entry (screenshot 1–2)
+• Book tab (labeled Payments in UI) — payment / checkout flow (screenshot 4)
+• Profile tab — barber-style profile (screenshot 3)
+• Tap AURA floating button — assistant sheet (screenshot 5)
+
+Regenerate PNGs: from repo root run:
+  npm run generate:play-listing-assets

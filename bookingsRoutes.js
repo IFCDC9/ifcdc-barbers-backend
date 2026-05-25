@@ -1,7 +1,15 @@
 import express from "express";
-import { extractBearerToken, resolveAuthPayload } from "./authRoutes.js";
+import { extractBearerToken, resolveAuthPayload, requireAuth } from "./authRoutes.js";
 import { isJwtGlobalSuperScope } from "./authPlatformJwt.js";
 import { dbQuery } from "./db.js";
+import {
+  BOOKING_STATUSES,
+  STATUS_LABELS,
+  canTransition,
+  isValidStatus,
+  loadStatusTimeline,
+  recordStatusChange,
+} from "./bookingStatusEngine.js";
 import { getPayPalHttpClient, ordersGetRequest } from "./paypalClient.js";
 import { roundMoney2, depositsAllowedForBooking } from "./styleBookingPricing.js";
 import {
@@ -15,6 +23,19 @@ import { BARBER_PLATFORM_FEE_USD, barberDepositsEffective } from "./subscription
 import { insertBarberFeeLedgerRow } from "./barberFeeLedger.js";
 import { createDepositPaymentLink } from "./depositPaymentLink.js";
 import { tenantMatches } from "./securityPolicy.js";
+import { createRequire } from "node:module";
+
+const require = createRequire(import.meta.url);
+const {
+  resolveBarberIdentity,
+  barberIdForTable,
+  BARBER_RESOLVE_MSG,
+  isBarberIdentityDbError,
+  logDbInsertDebug,
+  assertNotUuidForBigintBarberId,
+  resolvedBarberDbIdOnly,
+  getTableBarberIdType,
+} = require("./barberIdentity.cjs");
 
 function getAuthPayload(req) {
   const token = extractBearerToken(req.get("authorization"));
@@ -32,9 +53,8 @@ function getAuthRole(req) {
 }
 
 async function resolveBusinessIdForBarber(barberId) {
-  const bid = Number(barberId);
-  if (!Number.isFinite(bid)) return null;
-  const r = await dbQuery(`SELECT business_id FROM barbers WHERE id = $1 LIMIT 1`, [bid]);
+  if (barberId == null || String(barberId).trim() === "") return null;
+  const r = await dbQuery(`SELECT business_id FROM barbers WHERE id::text = $1 LIMIT 1`, [String(barberId)]);
   const v = r.rows?.[0]?.business_id;
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
@@ -332,9 +352,93 @@ async function verifyPayPalCapture({ paypalOrderId, paypalCaptureId, expectedAmo
   return { ok: true, order };
 }
 
-export function createBookingsRouter({ sendBookingEmail, requireAdmin } = {}) {
+/**
+ * Resolves whether `req.user` may read/mutate a given bookings row.
+ * Mirrors the access matrix documented on GET /api/bookings/:id and is reused
+ * by every per-id mutation endpoint. Returns null when access is denied so the
+ * caller can 404 (don't leak existence).
+ */
+async function resolveBookingActor(req, booking) {
+  const role = String(req.user?.role || "").trim().toLowerCase();
+  const userId = String(req.user?.id || "").trim();
+  const userEmail = String(req.user?.email || "").trim().toLowerCase();
+  const payload = getAuthPayload(req);
+  const isPlatformSuper = payload ? isJwtGlobalSuperScope(payload) : false;
+
+  let allowed = false;
+  let normalizedRole = role || "customer";
+
+  if (isPlatformSuper || role === "super_admin" || role === "admin") {
+    allowed = true;
+    normalizedRole = role || "admin";
+  } else if (role === "shop_owner") {
+    if (userId) {
+      const u = await dbQuery(
+        `SELECT business_id FROM app_users WHERE id = $1::uuid LIMIT 1`,
+        [userId],
+      );
+      allowed = tenantMatches(u.rows?.[0]?.business_id, booking.business_id);
+    }
+    normalizedRole = "shop_owner";
+  } else if (role === "barber") {
+    if (userId) {
+      const u = await dbQuery(
+        `SELECT barber_id FROM app_users WHERE id = $1::uuid LIMIT 1`,
+        [userId],
+      );
+      const myBarber = u.rows?.[0]?.barber_id;
+      allowed =
+        myBarber != null &&
+        booking.barber_id != null &&
+        String(myBarber) === String(booking.barber_id);
+    }
+    normalizedRole = "barber";
+  } else {
+    const ownsViaUserId =
+      booking.user_id != null && userId && String(booking.user_id) === userId;
+    const ownsViaEmail =
+      !!userEmail &&
+      !!booking.customer_email &&
+      String(booking.customer_email).trim().toLowerCase() === userEmail;
+    allowed = Boolean(ownsViaUserId || ownsViaEmail);
+    normalizedRole = "customer";
+  }
+
+  if (!allowed) return null;
+  return {
+    role: normalizedRole,
+    isPlatformSuper,
+    userId: userId || null,
+    userEmail: userEmail || null,
+    actor: {
+      userId: userId || null,
+      role: normalizedRole,
+      email: req.user?.email || null,
+    },
+  };
+}
+
+export function createBookingsRouter({ sendBookingEmail, sendBookingPush, requireAdmin } = {}) {
   const router = express.Router();
   const guard = typeof requireAdmin === "function" ? requireAdmin : (_req, _res, next) => next();
+
+  /**
+   * Wrap the injected push dispatcher so route handlers can fire-and-forget
+   * without worrying about boot order or environment. ALWAYS resolves; never
+   * rejects — push failures must not impact booking, payment, or auth flows.
+   */
+  function dispatchBookingPush(args) {
+    if (typeof sendBookingPush !== "function") return Promise.resolve({ ok: true, sent: 0 });
+    try {
+      return Promise.resolve(sendBookingPush({ ...args, dbQuery })).catch((e) => {
+        console.warn("[push] dispatchBookingPush rejected:", e?.message || e);
+        return { ok: false, sent: 0 };
+      });
+    } catch (e) {
+      console.warn("[push] dispatchBookingPush threw synchronously:", e?.message || e);
+      return Promise.resolve({ ok: false, sent: 0 });
+    }
+  }
 
   // Admin list (scoped for shop_owner — see bookingsAdminGuard)
   router.get("/api/admin/bookings", guard, async (req, res) => {
@@ -355,6 +459,821 @@ export function createBookingsRouter({ sendBookingEmail, requireAdmin } = {}) {
       tenantParams
     );
     res.json({ bookings: r.rows || [] });
+  });
+
+  const BOOKING_DETAIL_SELECT = `SELECT b.id, b.user_id, b.customer_name, b.customer_email, b.barber_name, b.barber_id, b.business_id, b.client_id, b.service, b.service_duration_minutes,
+              b.date, b.time,
+              b.phone,
+              b.amount, b.total_price, b.deposit_amount, b.amount_paid, b.remaining_balance,
+              b.payment_type, b.payment_status, b.payment_provider, b.paypal_order_id, b.paypal_capture_id,
+              b.style_id, b.style_title, b.style_image_url, b.tip_amount, b.total_paid,
+              b.platform_fee, b.total_amount, b.booking_status, b.is_paid_booking,
+              b.notes, b.cancelled_at, b.cancelled_by, b.created_at,
+              biz.name AS shop_name
+       FROM bookings b
+       LEFT JOIN businesses biz ON biz.id = b.business_id`;
+
+  router.get("/api/admin/bookings/:id", guard, async (req, res) => {
+    try {
+      const id = String(req.params.id || "").trim();
+      if (!id) return res.status(400).json({ ok: false, message: "Booking id required" });
+
+      const scope = req.bookingsAdminScope || { all: true };
+      const tenantSql = scope.all ? "" : " AND b.business_id = $2 ";
+      const params = scope.all ? [id] : [id, scope.businessId];
+
+      const r = await dbQuery(`${BOOKING_DETAIL_SELECT} WHERE b.id = $1::uuid${tenantSql} LIMIT 1`, params);
+      const booking = r.rows?.[0] || null;
+      if (!booking) return res.status(404).json({ ok: false, message: "Booking not found" });
+
+      return res.json({ ok: true, booking });
+    } catch (e) {
+      console.error("[booking] admin detail failed:", e?.stack || e);
+      return res.status(500).json({ ok: false, message: "Could not load booking" });
+    }
+  });
+
+  /**
+   * GET /api/bookings/:id
+   * Role-aware single-booking detail used by mobile booking detail screen.
+   * Access matrix:
+   *   - super_admin / admin                → any booking
+   *   - shop_owner                         → bookings where business_id matches their app_user.business_id
+   *   - barber                             → bookings where barber_id matches their app_user.barber_id
+   *   - customer / regular user            → bookings where user_id = self OR customer_email = self.email
+   * Returns 404 (not 403) when forbidden so we don't leak existence.
+   */
+  router.get("/api/bookings/:id", requireAuth, async (req, res) => {
+    try {
+      const id = String(req.params.id || "").trim();
+      if (!id) return res.status(400).json({ ok: false, message: "Booking id required" });
+
+      const r = await dbQuery(`${BOOKING_DETAIL_SELECT} WHERE b.id = $1::uuid LIMIT 1`, [id]);
+      const booking = r.rows?.[0] || null;
+      if (!booking) return res.status(404).json({ ok: false, message: "Booking not found" });
+
+      const actor = await resolveBookingActor(req, booking);
+      if (!actor) {
+        console.log(
+          `[booking] /api/bookings/:id forbidden id=${id.slice(0, 8)} role=${req.user?.role || "—"}`,
+        );
+        return res.status(404).json({ ok: false, message: "Booking not found" });
+      }
+
+      return res.json({ ok: true, booking });
+    } catch (e) {
+      console.error("[booking] /api/bookings/:id failed:", e?.stack || e);
+      return res.status(500).json({ ok: false, message: "Could not load booking" });
+    }
+  });
+
+  /**
+   * POST /api/bookings/:id/cancel
+   * Thin wrapper around the status engine. Body: { reason?: string, blockSlot?: boolean }.
+   * The slot is automatically released because the partial unique index
+   * (`bookings_slot_unique_confirmed_paid`) only counts confirmed+paid rows;
+   * a cancelled row drops out of the predicate. The optional `blockSlot` flag
+   * is reserved for future admin "hold this slot offline" behavior — for now
+   * we simply log it (no schema impact).
+   */
+  router.post("/api/bookings/:id/cancel", requireAuth, async (req, res) => {
+    try {
+      const id = String(req.params.id || "").trim();
+      if (!id) return res.status(400).json({ ok: false, message: "Booking id required" });
+
+      const reason =
+        typeof req.body?.reason === "string" && req.body.reason.trim()
+          ? req.body.reason.trim().slice(0, 1000)
+          : null;
+      const blockSlot = req.body?.blockSlot === true;
+
+      const r = await dbQuery(`${BOOKING_DETAIL_SELECT} WHERE b.id = $1::uuid LIMIT 1`, [id]);
+      const booking = r.rows?.[0] || null;
+      if (!booking) return res.status(404).json({ ok: false, message: "Booking not found" });
+
+      const actor = await resolveBookingActor(req, booking);
+      if (!actor) return res.status(404).json({ ok: false, message: "Booking not found" });
+
+      const currentStatus = String(booking.booking_status || "").toLowerCase();
+      const transition = canTransition({
+        from: currentStatus,
+        to: "cancelled",
+        role: actor.role,
+        isPlatformSuper: actor.isPlatformSuper,
+      });
+
+      if (currentStatus === "cancelled") {
+        return res.status(409).json({ ok: false, message: "This booking is already cancelled." });
+      }
+      if (currentStatus === "completed") {
+        return res
+          .status(409)
+          .json({ ok: false, message: "Completed appointments can't be cancelled." });
+      }
+      if (!transition.ok) {
+        return res
+          .status(403)
+          .json({ ok: false, message: "You can't cancel this appointment from its current state." });
+      }
+
+      // Only admin / shop_owner can request to "block the slot" — silently ignore for others.
+      const slotRetained = blockSlot && (actor.role === "shop_owner" || actor.isPlatformSuper || actor.role === "admin" || actor.role === "super_admin");
+
+      const upd = await dbQuery(
+        `UPDATE bookings
+         SET booking_status = 'cancelled',
+             cancelled_at = NOW(),
+             cancelled_by = $2,
+             cancellation_reason = COALESCE($3, cancellation_reason)
+         WHERE id = $1::uuid
+         RETURNING id, booking_status, payment_status, cancelled_at, cancelled_by, cancellation_reason`,
+        [id, actor.role, reason],
+      );
+      const updated = upd.rows?.[0];
+      if (!updated) return res.status(500).json({ ok: false, message: "Cancel failed" });
+
+      const noteParts = [];
+      if (reason) noteParts.push(reason);
+      if (slotRetained) noteParts.push("[slot held — admin may release manually]");
+      await recordStatusChange({
+        bookingId: id,
+        previousStatus: currentStatus,
+        newStatus: "cancelled",
+        actor: actor.actor,
+        note: noteParts.length ? noteParts.join(" ") : null,
+      });
+
+      // Best-effort push fanout. Never blocks; never throws to the caller.
+      void dispatchBookingPush({
+        booking,
+        kind: "booking_cancelled",
+        audience: ["customer", "barber", "shop_owners"],
+        data: { bookingId: id, reason: reason || null },
+      });
+
+      const refundLine = "Refund review may be required depending on payment policy.";
+      const baseMessage =
+        actor.role === "customer"
+          ? "Your appointment has been cancelled."
+          : "Booking cancelled.";
+
+      return res.json({
+        ok: true,
+        booking: updated,
+        message: `${baseMessage} ${refundLine}`,
+        refundReviewRequired: true,
+      });
+    } catch (e) {
+      console.error("[booking] /api/bookings/:id/cancel failed:", e?.stack || e);
+      return res.status(500).json({ ok: false, message: "Cancel failed" });
+    }
+  });
+
+  /**
+   * GET /api/bookings/:id/available-reschedule-slots
+   * Mirrors `/api/app-bookings/available-slots` but is bound to a specific
+   * booking — the booking's own row is excluded from the occupied list so the
+   * customer can keep the same date and pick a different time, or even reselect
+   * their current slot. Optional `?date=YYYY-MM-DD`; if omitted, defaults to
+   * the booking's existing date so the screen has a sensible first paint.
+   */
+  router.get("/api/bookings/:id/available-reschedule-slots", requireAuth, async (req, res) => {
+    try {
+      const id = String(req.params.id || "").trim();
+      if (!id) return res.status(400).json({ ok: false, message: "Booking id required" });
+
+      const sel = await dbQuery(`${BOOKING_DETAIL_SELECT} WHERE b.id = $1::uuid LIMIT 1`, [id]);
+      const booking = sel.rows?.[0] || null;
+      if (!booking) return res.status(404).json({ ok: false, message: "Booking not found" });
+
+      const actor = await resolveBookingActor(req, booking);
+      if (!actor) return res.status(404).json({ ok: false, message: "Booking not found" });
+
+      const requestedDate = String(req.query?.date || "").trim();
+      let dateStr = null;
+      if (/^\d{4}-\d{2}-\d{2}$/.test(requestedDate)) dateStr = requestedDate;
+      else if (booking.date) {
+        dateStr =
+          booking.date instanceof Date
+            ? booking.date.toISOString().slice(0, 10)
+            : String(booking.date).slice(0, 10);
+      }
+      if (!dateStr) {
+        return res
+          .status(400)
+          .json({ ok: false, message: "Pass date=YYYY-MM-DD to load reschedule slots." });
+      }
+
+      const slotEngine = await import("./barberSlotEngine.js");
+      const payload = await slotEngine.getAvailableSlotsForBarberDate(
+        booking.barber_id,
+        dateStr,
+        booking.barber_name || "",
+        { excludeBookingId: id },
+      );
+
+      return res.json({
+        ok: true,
+        date: dateStr,
+        barberId: booking.barber_id,
+        barberName: booking.barber_name,
+        currentDate:
+          booking.date instanceof Date
+            ? booking.date.toISOString().slice(0, 10)
+            : String(booking.date || "").slice(0, 10),
+        currentTime: booking.time
+          ? new Date(`1970-01-01T${String(booking.time)}`).toLocaleTimeString(undefined, {
+              hour: "numeric",
+              minute: "2-digit",
+            })
+          : null,
+        ...payload,
+      });
+    } catch (e) {
+      console.error("[booking] /available-reschedule-slots failed:", e?.stack || e);
+      return res.status(500).json({ ok: false, message: "Could not load slots" });
+    }
+  });
+
+  /**
+   * POST /api/bookings/:id/reschedule
+   * Body: { date: "YYYY-MM-DD", time: "10:30 AM", note?: string }.
+   *
+   * - Validates ownership + role transition
+   * - Re-runs validateBookingSlot with the booking excluded from occupancy
+   * - Updates date/time atomically and stamps the rescheduled_* columns
+   * - Records a status_history row containing the from/to slot
+   * - Sends a refreshed confirmation email best-effort (failure logs only)
+   */
+  router.post("/api/bookings/:id/reschedule", requireAuth, async (req, res) => {
+    try {
+      const id = String(req.params.id || "").trim();
+      if (!id) return res.status(400).json({ ok: false, message: "Booking id required" });
+
+      const newDate = String(req.body?.date || "").trim();
+      const newTimeLabel = String(req.body?.time || "").trim();
+      const note =
+        typeof req.body?.note === "string" && req.body.note.trim()
+          ? req.body.note.trim().slice(0, 1000)
+          : null;
+
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(newDate)) {
+        return res.status(400).json({ ok: false, message: "date must be YYYY-MM-DD." });
+      }
+      if (!newTimeLabel) {
+        return res.status(400).json({ ok: false, message: "time is required (e.g. '10:30 AM')." });
+      }
+
+      const sel = await dbQuery(`${BOOKING_DETAIL_SELECT} WHERE b.id = $1::uuid LIMIT 1`, [id]);
+      const booking = sel.rows?.[0] || null;
+      if (!booking) return res.status(404).json({ ok: false, message: "Booking not found" });
+
+      const actor = await resolveBookingActor(req, booking);
+      if (!actor) return res.status(404).json({ ok: false, message: "Booking not found" });
+
+      const currentStatus = String(booking.booking_status || "").toLowerCase();
+      const targetStatus = "confirmed";
+      const transition = canTransition({
+        from: currentStatus,
+        to: targetStatus,
+        role: actor.role,
+        isPlatformSuper: actor.isPlatformSuper,
+      });
+      // Customers in `confirmed` need an explicit lane: confirmed → confirmed is a self-loop.
+      // Treat reschedule as allowed when either canTransition({to:'confirmed'}) succeeds OR
+      // canTransition({to:'rescheduled'}) succeeds (their reschedule entry point), since the
+      // resulting row is `confirmed` after the new slot is locked in.
+      const reschedTransition = canTransition({
+        from: currentStatus,
+        to: "rescheduled",
+        role: actor.role,
+        isPlatformSuper: actor.isPlatformSuper,
+      });
+      if (!transition.ok && !reschedTransition.ok) {
+        return res.status(403).json({
+          ok: false,
+          message: "You can't reschedule this appointment from its current state.",
+        });
+      }
+      if (currentStatus === "completed" || currentStatus === "cancelled") {
+        return res
+          .status(409)
+          .json({ ok: false, message: "This appointment can't be rescheduled." });
+      }
+
+      const slotEngine = await import("./barberSlotEngine.js");
+      const slotCheck = await slotEngine.validateBookingSlot(
+        booking.barber_id,
+        newDate,
+        newTimeLabel,
+        booking.barber_name || "",
+        { excludeBookingId: id },
+      );
+      if (!slotCheck.ok) {
+        return res.status(409).json({
+          ok: false,
+          error: slotCheck.code || "slot_unavailable",
+          message: slotCheck.message || "That time is not available.",
+        });
+      }
+      const newTimeSql = slotCheck.timeSql;
+
+      const oldDateStr =
+        booking.date instanceof Date
+          ? booking.date.toISOString().slice(0, 10)
+          : String(booking.date || "").slice(0, 10);
+      const oldTimeSql = String(booking.time || "");
+
+      let upd;
+      try {
+        upd = await dbQuery(
+          `UPDATE bookings
+           SET date = $2::date,
+               time = $3::time,
+               booking_status = 'confirmed',
+               rescheduled_from_date = COALESCE(rescheduled_from_date, $4::date),
+               rescheduled_from_time = COALESCE(rescheduled_from_time, $5::time),
+               rescheduled_to_date = $2::date,
+               rescheduled_to_time = $3::time,
+               rescheduled_by = $6,
+               rescheduled_at = NOW()
+           WHERE id = $1::uuid
+           RETURNING id, date::text AS date, to_char(time, 'HH12:MI AM') AS time,
+                     booking_status, payment_status,
+                     rescheduled_from_date, rescheduled_from_time,
+                     rescheduled_to_date, rescheduled_to_time,
+                     rescheduled_by, rescheduled_at`,
+          [id, newDate, newTimeSql, oldDateStr || null, oldTimeSql || null, actor.role],
+        );
+      } catch (sqlErr) {
+        if (sqlErr?.code === "23505") {
+          return res.status(409).json({
+            ok: false,
+            error: "slot_taken",
+            message: "That time was just booked — pick another slot.",
+          });
+        }
+        throw sqlErr;
+      }
+      const updated = upd.rows?.[0];
+      if (!updated) return res.status(500).json({ ok: false, message: "Reschedule failed" });
+
+      const oldLabel = `${oldDateStr || "—"} ${
+        oldTimeSql
+          ? new Date(`1970-01-01T${oldTimeSql}`).toLocaleTimeString(undefined, {
+              hour: "numeric",
+              minute: "2-digit",
+            })
+          : ""
+      }`.trim();
+      const newLabel = `${newDate} ${newTimeLabel}`.trim();
+
+      await recordStatusChange({
+        bookingId: id,
+        previousStatus: currentStatus,
+        newStatus: "confirmed",
+        actor: actor.actor,
+        note: note
+          ? `Rescheduled from ${oldLabel} to ${newLabel}. ${note}`
+          : `Rescheduled from ${oldLabel} to ${newLabel}.`,
+      });
+
+      // Best-effort push fanout — uses the *new* date/time in the body.
+      void dispatchBookingPush({
+        booking: { ...booking, date: newDate, time: newTimeLabel },
+        kind: "booking_rescheduled",
+        audience: ["customer", "barber", "shop_owners"],
+        data: { bookingId: id, fromLabel: oldLabel, toLabel: newLabel },
+      });
+
+      // Best-effort confirmation email — logs warning but never blocks the save.
+      if (typeof sendBookingEmail === "function") {
+        const email = String(booking.customer_email || "").trim();
+        const isInternal =
+          /@ifcdc\.local$/i.test(email) || /^pending\+/i.test(email);
+        if (email && !isInternal) {
+          try {
+            await sendBookingEmail({
+              name: booking.customer_name || "Guest",
+              email,
+              service: booking.service || booking.style_title || "Appointment",
+              servicePrice: Number(booking.total_price ?? booking.amount ?? 0),
+              serviceDuration: Number(booking.service_duration_minutes) || undefined,
+              date: newDate,
+              time: newTimeLabel,
+              paymentId: booking.paypal_capture_id || booking.paypal_order_id || null,
+              barberName: booking.barber_name || "",
+              totalPrice: Number(booking.total_price ?? booking.amount ?? 0),
+              depositAmount: Number(booking.deposit_amount ?? 0),
+              amountPaid: Number(booking.amount_paid ?? 0),
+              remainingBalance: Number(booking.remaining_balance ?? 0),
+              paymentType: booking.payment_type || "full",
+              tipAmount: Number(booking.tip_amount ?? 0),
+              totalPaid: Number(booking.total_paid ?? booking.total_amount ?? 0),
+              language: undefined,
+            });
+            console.log(`[reschedule] confirmation email sent to ${email} for ${id.slice(0, 8)}`);
+          } catch (emailErr) {
+            console.warn(
+              `[reschedule] confirmation email failed for ${id.slice(0, 8)}:`,
+              emailErr?.message || emailErr,
+            );
+          }
+        }
+      }
+
+      return res.json({
+        ok: true,
+        booking: updated,
+        message: `Appointment moved to ${newLabel}.`,
+      });
+    } catch (e) {
+      console.error("[booking] /reschedule failed:", e?.stack || e);
+      return res.status(500).json({ ok: false, message: "Reschedule failed" });
+    }
+  });
+
+  /**
+   * PUT /api/bookings/:id/status
+   * Universal role-aware status mutation. Body: { status, note? }.
+   * - Validates the transition via the shared engine
+   * - Refuses self-loops and forbidden role/state combinations
+   * - Records a row in booking_status_history
+   * - Stamps cancelled_at/cancelled_by when transitioning to 'cancelled'
+   */
+  router.put("/api/bookings/:id/status", requireAuth, async (req, res) => {
+    try {
+      const id = String(req.params.id || "").trim();
+      if (!id) return res.status(400).json({ ok: false, message: "Booking id required" });
+
+      const target = String(req.body?.status || "").trim().toLowerCase();
+      if (!isValidStatus(target)) {
+        return res.status(400).json({
+          ok: false,
+          message: `Status must be one of: ${BOOKING_STATUSES.join(", ")}`,
+        });
+      }
+
+      const note =
+        typeof req.body?.note === "string" && req.body.note.trim() ? req.body.note.trim() : null;
+
+      const r = await dbQuery(`${BOOKING_DETAIL_SELECT} WHERE b.id = $1::uuid LIMIT 1`, [id]);
+      const booking = r.rows?.[0] || null;
+      if (!booking) return res.status(404).json({ ok: false, message: "Booking not found" });
+
+      const actor = await resolveBookingActor(req, booking);
+      if (!actor) return res.status(404).json({ ok: false, message: "Booking not found" });
+
+      const currentStatus = String(booking.booking_status || "").toLowerCase();
+      const transition = canTransition({
+        from: currentStatus,
+        to: target,
+        role: actor.role,
+        isPlatformSuper: actor.isPlatformSuper,
+      });
+
+      if (!transition.ok) {
+        const reasons = {
+          no_change: "Booking is already in that status.",
+          invalid_target_status: "That status is not recognized.",
+          missing_current_status: "Current booking status is missing.",
+          transition_not_allowed: `${STATUS_LABELS[currentStatus] || currentStatus} → ${STATUS_LABELS[target] || target} isn't allowed for your role.`,
+          role_not_allowed: "You don't have permission to change this status.",
+        };
+        return res.status(409).json({
+          ok: false,
+          error: transition.reason,
+          message: reasons[transition.reason] || "That status change isn't allowed right now.",
+        });
+      }
+
+      const isCancellation = target === "cancelled";
+      const upd = await dbQuery(
+        `UPDATE bookings
+         SET booking_status = $2,
+             cancelled_at = CASE WHEN $3::boolean THEN NOW() ELSE cancelled_at END,
+             cancelled_by = CASE WHEN $3::boolean THEN $4 ELSE cancelled_by END
+         WHERE id = $1::uuid
+         RETURNING id, booking_status, payment_status, cancelled_at, cancelled_by`,
+        [id, target, isCancellation, isCancellation ? actor.role : null],
+      );
+      const updated = upd.rows?.[0];
+      if (!updated) return res.status(500).json({ ok: false, message: "Status update failed" });
+
+      await recordStatusChange({
+        bookingId: id,
+        previousStatus: currentStatus,
+        newStatus: target,
+        actor: actor.actor,
+        note: transition.override
+          ? note
+            ? `[override] ${note}`
+            : "[override] Status set by elevated role"
+          : note,
+      });
+
+      // Best-effort push fanout. Cancellations and reschedules use their own
+      // dedicated kinds; everything else surfaces as a status update.
+      const pushKind =
+        target === "cancelled"
+          ? "booking_cancelled"
+          : target === "rescheduled"
+            ? "booking_rescheduled"
+            : "booking_status_update";
+      void dispatchBookingPush({
+        booking,
+        kind: pushKind,
+        audience: ["customer", "barber", "shop_owners"],
+        data: { bookingId: id, status: target, previousStatus: currentStatus },
+      });
+
+      const verb =
+        target === "checked_in"
+          ? "checked in"
+          : target === "in_progress"
+            ? "started"
+            : target === "completed"
+              ? "marked complete"
+              : target === "no_show"
+                ? "marked no-show"
+                : target === "rescheduled"
+                  ? "marked for reschedule"
+                  : target === "cancelled"
+                    ? "cancelled"
+                    : `set to ${STATUS_LABELS[target] || target}`;
+
+      return res.json({
+        ok: true,
+        booking: updated,
+        message: `Booking ${verb}.`,
+      });
+    } catch (e) {
+      console.error("[booking] PUT status failed:", e?.stack || e);
+      return res.status(500).json({ ok: false, message: "Status update failed" });
+    }
+  });
+
+  /**
+   * GET /api/bookings/:id/status-history
+   * Returns the timeline rows for a booking ordered oldest → newest.
+   * Synthesizes a "Booked" row from bookings.created_at when no history rows
+   * exist yet (covers legacy bookings).
+   */
+  router.get("/api/bookings/:id/status-history", requireAuth, async (req, res) => {
+    try {
+      const id = String(req.params.id || "").trim();
+      if (!id) return res.status(400).json({ ok: false, message: "Booking id required" });
+
+      const r = await dbQuery(`${BOOKING_DETAIL_SELECT} WHERE b.id = $1::uuid LIMIT 1`, [id]);
+      const booking = r.rows?.[0] || null;
+      if (!booking) return res.status(404).json({ ok: false, message: "Booking not found" });
+
+      const actor = await resolveBookingActor(req, booking);
+      if (!actor) return res.status(404).json({ ok: false, message: "Booking not found" });
+
+      const timeline = await loadStatusTimeline(id, {
+        created_at: booking.created_at,
+        booking_status: booking.booking_status,
+      });
+
+      return res.json({ ok: true, history: timeline });
+    } catch (e) {
+      console.error("[booking] GET status-history failed:", e?.stack || e);
+      return res.status(500).json({ ok: false, message: "Could not load history" });
+    }
+  });
+
+  /**
+   * POST /api/bookings/:id/status-history
+   * Append a manual note to the timeline without changing the booking status.
+   * Optional body: { note }. Useful for "customer ran late", "rebooked for Sat",
+   * etc. Audited the same way as a status change.
+   */
+  router.post("/api/bookings/:id/status-history", requireAuth, async (req, res) => {
+    try {
+      const id = String(req.params.id || "").trim();
+      if (!id) return res.status(400).json({ ok: false, message: "Booking id required" });
+
+      const note =
+        typeof req.body?.note === "string" && req.body.note.trim() ? req.body.note.trim() : null;
+      if (!note) return res.status(400).json({ ok: false, message: "Note text is required" });
+
+      const r = await dbQuery(`${BOOKING_DETAIL_SELECT} WHERE b.id = $1::uuid LIMIT 1`, [id]);
+      const booking = r.rows?.[0] || null;
+      if (!booking) return res.status(404).json({ ok: false, message: "Booking not found" });
+
+      const actor = await resolveBookingActor(req, booking);
+      if (!actor) return res.status(404).json({ ok: false, message: "Booking not found" });
+
+      const currentStatus = String(booking.booking_status || "").toLowerCase();
+      await recordStatusChange({
+        bookingId: id,
+        previousStatus: currentStatus,
+        newStatus: currentStatus,
+        actor: actor.actor,
+        note,
+      });
+
+      return res.json({ ok: true, message: "Note added." });
+    } catch (e) {
+      console.error("[booking] POST status-history failed:", e?.stack || e);
+      return res.status(500).json({ ok: false, message: "Could not add note" });
+    }
+  });
+
+  router.patch("/api/admin/bookings/:id", guard, async (req, res) => {
+    try {
+      const id = String(req.params.id || "").trim();
+      const action = String(req.body?.action || "").trim().toLowerCase();
+      if (!id) return res.status(400).json({ ok: false, message: "Booking id required" });
+      if (!action) return res.status(400).json({ ok: false, message: "action required" });
+
+      const scope = req.bookingsAdminScope || { all: true };
+      const tenantSql = scope.all ? "" : " AND business_id = $2 ";
+      const scopeParams = scope.all ? [id] : [id, scope.businessId];
+      const detailTenantSql = scope.all ? "" : " AND b.business_id = $2 ";
+
+      const found = await dbQuery(`${BOOKING_DETAIL_SELECT} WHERE b.id = $1::uuid${detailTenantSql} LIMIT 1`, scopeParams);
+      const booking = found.rows?.[0] || null;
+      if (!booking) return res.status(404).json({ ok: false, message: "Booking not found" });
+
+      const adminActor = {
+        userId: req.user?.id ? String(req.user.id) : null,
+        role: String(req.user?.role || "admin"),
+        email: req.user?.email || null,
+      };
+      const previousStatus = String(booking.booking_status || "").toLowerCase();
+
+      if (action === "complete") {
+        const r = await dbQuery(
+          `UPDATE bookings SET booking_status = 'completed'
+           WHERE id = $1::uuid${tenantSql}
+           RETURNING id, booking_status, payment_status`,
+          scopeParams
+        );
+        if (r.rows?.[0]) {
+          await recordStatusChange({
+            bookingId: id,
+            previousStatus,
+            newStatus: "completed",
+            actor: adminActor,
+            note: req.body?.note || null,
+          });
+          void dispatchBookingPush({
+            booking,
+            kind: "booking_status_update",
+            audience: ["customer", "barber", "shop_owners"],
+            data: { bookingId: id, status: "completed" },
+          });
+        }
+        return res.json({ ok: true, booking: r.rows[0], message: "Booking marked complete" });
+      }
+
+      if (action === "cancel") {
+        const r = await dbQuery(
+          `UPDATE bookings SET
+             booking_status = 'cancelled',
+             cancelled_at = COALESCE(cancelled_at, NOW()),
+             cancelled_by = COALESCE(cancelled_by, $${scopeParams.length + 1})
+           WHERE id = $1::uuid${tenantSql}
+           RETURNING id, booking_status, payment_status, cancelled_at, cancelled_by`,
+          [...scopeParams, adminActor.role]
+        );
+        if (r.rows?.[0]) {
+          await recordStatusChange({
+            bookingId: id,
+            previousStatus,
+            newStatus: "cancelled",
+            actor: adminActor,
+            note: req.body?.note || null,
+          });
+          void dispatchBookingPush({
+            booking,
+            kind: "booking_cancelled",
+            audience: ["customer", "barber", "shop_owners"],
+            data: { bookingId: id },
+          });
+        }
+        return res.json({ ok: true, booking: r.rows[0], message: "Booking cancelled" });
+      }
+
+      if (action === "refund") {
+        const r = await dbQuery(
+          `UPDATE bookings SET
+             payment_status = 'refunded',
+             booking_status = 'cancelled',
+             cancelled_at = COALESCE(cancelled_at, NOW()),
+             cancelled_by = COALESCE(cancelled_by, $${scopeParams.length + 1})
+           WHERE id = $1::uuid${tenantSql}
+           RETURNING id, booking_status, payment_status, cancelled_at, cancelled_by`,
+          [...scopeParams, adminActor.role]
+        );
+        if (r.rows?.[0]) {
+          await recordStatusChange({
+            bookingId: id,
+            previousStatus,
+            newStatus: "cancelled",
+            actor: adminActor,
+            note: req.body?.note ? `[refund] ${req.body.note}` : "[refund] Payment marked refunded",
+          });
+          void dispatchBookingPush({
+            booking,
+            kind: "booking_cancelled",
+            audience: ["customer", "barber", "shop_owners"],
+            data: { bookingId: id, refunded: true },
+          });
+        }
+        return res.json({
+          ok: true,
+          booking: r.rows[0],
+          message: "Refund recorded. Process PayPal settlement in the provider console if needed.",
+        });
+      }
+
+      if (action === "receive_in_person") {
+        const r = await dbQuery(
+          `UPDATE bookings SET
+             payment_status = 'paid',
+             amount_paid = COALESCE(total_price, amount, 0),
+             remaining_balance = 0,
+             payment_type = COALESCE(NULLIF(btrim(payment_type), ''), 'full'),
+             total_paid = COALESCE(total_price, amount, 0) + COALESCE(tip_amount, 0)
+           WHERE id = $1::uuid
+             AND payment_status IN ('pay_in_person', 'pending', 'pay_in_person_pending')${tenantSql}
+           RETURNING id, booking_status, payment_status, amount_paid, remaining_balance`,
+          scopeParams
+        );
+        if (!r.rows?.length) {
+          return res.status(404).json({ ok: false, message: "No in-person booking found for this id" });
+        }
+        await recordStatusChange({
+          bookingId: id,
+          previousStatus,
+          newStatus: previousStatus,
+          actor: adminActor,
+          note: "In-person payment received",
+        });
+        return res.json({ ok: true, booking: r.rows[0], message: "In-person payment recorded" });
+      }
+
+      return res.status(400).json({ ok: false, message: "Unknown action" });
+    } catch (e) {
+      console.error("[booking] admin patch failed:", e?.stack || e);
+      return res.status(500).json({ ok: false, message: "Update failed" });
+    }
+  });
+
+  router.post("/api/admin/bookings/:id/resend-confirmation", guard, async (req, res) => {
+    try {
+      const id = String(req.params.id || "").trim();
+      if (!id) return res.status(400).json({ ok: false, message: "Booking id required" });
+
+      const scope = req.bookingsAdminScope || { all: true };
+      const tenantSql = scope.all ? "" : " AND b.business_id = $2 ";
+      const params = scope.all ? [id] : [id, scope.businessId];
+
+      const r = await dbQuery(`${BOOKING_DETAIL_SELECT} WHERE b.id = $1::uuid${tenantSql} LIMIT 1`, params);
+      const booking = r.rows?.[0] || null;
+      if (!booking) return res.status(404).json({ ok: false, message: "Booking not found" });
+
+      const email = String(booking.customer_email || "").trim();
+      if (!email || /@ifcdc\.local$/i.test(email) || /^pending\+/i.test(email)) {
+        return res.status(400).json({ ok: false, message: "No customer email on file for this booking" });
+      }
+
+      if (typeof sendBookingEmail !== "function") {
+        return res.json({ ok: true, queued: true, message: "Confirmation queued for delivery" });
+      }
+
+      const dateStr = booking.date instanceof Date ? booking.date.toISOString().slice(0, 10) : String(booking.date || "").slice(0, 10);
+      const timeStr = String(booking.time || "").slice(0, 5);
+
+      const mail = await sendBookingEmail({
+        name: booking.customer_name || "Guest",
+        email,
+        barberName: booking.barber_name || "Barber",
+        date: dateStr,
+        time: timeStr,
+        service: booking.style_title || booking.service || "Appointment",
+        paymentId: booking.paypal_capture_id || booking.paypal_order_id || undefined,
+        totalPrice: Number(booking.total_price ?? booking.amount ?? 0),
+        depositAmount: Number(booking.deposit_amount ?? 0),
+        amountPaid: Number(booking.amount_paid ?? 0),
+        remainingBalance: Number(booking.remaining_balance ?? 0),
+        paymentType: booking.payment_type || "full",
+        tipAmount: Number(booking.tip_amount ?? 0),
+        totalPaid: Number(booking.total_paid ?? 0),
+      });
+
+      if (mail?.error) {
+        return res.status(502).json({ ok: false, message: "Confirmation could not be sent right now" });
+      }
+
+      return res.json({ ok: true, message: "Confirmation email sent" });
+    } catch (e) {
+      console.error("[booking] resend confirmation failed:", e?.stack || e);
+      return res.status(500).json({ ok: false, message: "Could not resend confirmation" });
+    }
   });
 
   /**
@@ -597,15 +1516,28 @@ export function createBookingsRouter({ sendBookingEmail, requireAdmin } = {}) {
 
       const customerName = String(body.name || "").trim();
       const customerEmail = String(body.email || "").trim();
-      const barberId = Number(body.barberId ?? body.barber);
-      const barberName = String(body.barber || "").trim();
+      const barberName = String(body.barber || body.barberName || "").trim();
       const dateStr = String(body.date || "").trim();
       const timeStr = String(body.time || "").trim();
       const paypalOrderId = String(body.paypalOrderId || "").trim();
       const paypalCaptureId = String(body.paymentId || body.paypalCaptureId || "").trim();
       const styleId = String(body.styleId || "").trim();
 
-      if (!customerName || !customerEmail || !dateStr || !timeStr || !Number.isFinite(barberId)) {
+      const resolved = await resolveBarberIdentity(
+        dbQuery,
+        body.barberId ?? body.barber ?? body.barberUuid ?? body.barber_uuid,
+        barberName,
+      );
+      if (!resolved) {
+        return res.status(400).json({ error: "barber_unresolved", message: BARBER_RESOLVE_MSG });
+      }
+      const barberId = await barberIdForTable(dbQuery, "bookings", resolved);
+      if (barberId == null) {
+        return res.status(400).json({ error: "barber_unresolved", message: BARBER_RESOLVE_MSG });
+      }
+      const confirmedBarberName = resolved.barberName || barberName;
+
+      if (!customerName || !customerEmail || !dateStr || !timeStr) {
         return res.status(400).json({ error: "missing_fields", message: "Missing required booking fields" });
       }
       if (!paypalOrderId || !paypalCaptureId) {
@@ -632,7 +1564,7 @@ export function createBookingsRouter({ sendBookingEmail, requireAdmin } = {}) {
         return res.status(400).json({ error: "style_not_found", message: "Style not found" });
       }
 
-      const slotOk = await assertSlotWithinAvailability(barberId, dateStr, timeStr);
+      const slotOk = await assertSlotWithinAvailability(barberId, dateStr, timeStr, confirmedBarberName);
       if (!slotOk.ok) {
         return res.status(400).json({ error: "slot_not_available", message: slotOk.message || "Time not available" });
       }
@@ -673,6 +1605,20 @@ export function createBookingsRouter({ sendBookingEmail, requireAdmin } = {}) {
       const userId = getAuthUserId(req);
       const styleImageUrl = quoted.styleImageUrl ?? (styleRow.image_url ? String(styleRow.image_url) : null);
       const tenantBizIdForInsert = await resolveBusinessIdForBarber(barberId);
+      const bookingsColType = await getTableBarberIdType(dbQuery, "bookings");
+      logDbInsertDebug({
+        route: req.path,
+        table: "bookings",
+        barberId: body.barberId,
+        barber_id: body.barber_id,
+        resolvedBarberDbId: resolvedBarberDbIdOnly(resolved),
+        insertBarberId: barberId,
+        bookingsColType,
+        payload: body,
+      });
+      if (bookingsColType !== "uuid") {
+        assertNotUuidForBigintBarberId(barberId, "bookings", req.path);
+      }
 
       const insert = await dbQuery(
         `INSERT INTO bookings
@@ -691,7 +1637,7 @@ export function createBookingsRouter({ sendBookingEmail, requireAdmin } = {}) {
           userId,
           customerName,
           customerEmail,
-          barberName || null,
+          confirmedBarberName || null,
           barberId,
           clientId,
           serviceTitle,

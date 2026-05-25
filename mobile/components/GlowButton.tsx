@@ -1,6 +1,18 @@
 import React, { useMemo, useRef } from "react";
-import { Animated, Pressable, StyleProp, StyleSheet, Text, TextStyle, ViewStyle } from "react-native";
-import { theme } from "../constants/theme";
+import {
+  ActivityIndicator,
+  Animated,
+  Pressable,
+  StyleProp,
+  StyleSheet,
+  Text,
+  TextStyle,
+  View,
+  ViewStyle,
+} from "react-native";
+import { palette, radius, shadow, typography } from "../constants/theme";
+
+type Variant = "primary" | "outline" | "secondary" | "danger";
 
 type Props = {
   label: string;
@@ -9,7 +21,11 @@ type Props = {
   loading?: boolean;
   style?: StyleProp<ViewStyle>;
   textStyle?: StyleProp<TextStyle>;
-  variant?: "primary" | "outline";
+  variant?: Variant;
+  /** Optional small icon element rendered to the left of the label. */
+  iconLeft?: React.ReactNode;
+  /** Optional small icon element rendered to the right of the label. */
+  iconRight?: React.ReactNode;
 };
 
 export default function GlowButton({
@@ -20,21 +36,38 @@ export default function GlowButton({
   style,
   textStyle,
   variant = "primary",
+  iconLeft,
+  iconRight,
 }: Props) {
   const scale = useRef(new Animated.Value(1)).current;
   const isDisabled = disabled || loading;
 
-  const baseStyle = useMemo(() => {
-    return variant === "outline" ? styles.outline : styles.primary;
-  }, [variant]);
+  const variantStyles = useMemo(() => stylesByVariant(variant), [variant]);
 
   const pressIn = () => {
-    Animated.spring(scale, { toValue: 0.98, useNativeDriver: true, speed: 30, bounciness: 8 }).start();
+    Animated.spring(scale, {
+      toValue: 0.97,
+      useNativeDriver: true,
+      speed: 30,
+      bounciness: 6,
+    }).start();
   };
 
   const pressOut = () => {
-    Animated.spring(scale, { toValue: 1, useNativeDriver: true, speed: 30, bounciness: 8 }).start();
+    Animated.spring(scale, {
+      toValue: 1,
+      useNativeDriver: true,
+      speed: 30,
+      bounciness: 6,
+    }).start();
   };
+
+  const labelColor =
+    variant === "primary"
+      ? "#101010"
+      : variant === "danger"
+        ? "#fff"
+        : palette.gold;
 
   return (
     <Animated.View style={{ transform: [{ scale }], width: "100%" }}>
@@ -45,48 +78,148 @@ export default function GlowButton({
         onPressOut={pressOut}
         style={({ pressed }) => [
           styles.btn,
-          baseStyle,
-          pressed && !isDisabled && styles.pressed,
+          variantStyles.base,
+          pressed && !isDisabled && variantStyles.pressed,
           isDisabled && styles.disabled,
           style,
         ]}
-        android_ripple={{ color: "rgba(245,200,66,0.25)" }}
+        android_ripple={{
+          color:
+            variant === "primary"
+              ? "rgba(0,0,0,0.18)"
+              : "rgba(245,200,66,0.20)",
+          borderless: false,
+        }}
+        accessibilityRole="button"
+        accessibilityState={{ disabled: isDisabled, busy: loading }}
       >
-        <Text style={[styles.text, variant === "outline" && styles.textOutline, textStyle]}>
-          {loading ? "…" : label}
-        </Text>
+        {variant === "primary" ? (
+          <View pointerEvents="none" style={styles.primaryHighlight} />
+        ) : null}
+        <View style={styles.row}>
+          {loading ? (
+            <ActivityIndicator
+              size="small"
+              color={variant === "primary" ? "#101010" : palette.gold}
+              style={styles.spinner}
+            />
+          ) : (
+            iconLeft && <View style={styles.iconWrap}>{iconLeft}</View>
+          )}
+          <Text
+            style={[
+              typography.buttonLabel,
+              { color: labelColor },
+              textStyle,
+            ]}
+            numberOfLines={1}
+          >
+            {loading ? "Working…" : label}
+          </Text>
+          {!loading && iconRight ? <View style={styles.iconWrap}>{iconRight}</View> : null}
+        </View>
       </Pressable>
     </Animated.View>
   );
 }
 
+function stylesByVariant(variant: Variant) {
+  switch (variant) {
+    case "outline":
+      return {
+        base: styles.outline,
+        pressed: styles.outlinePressed,
+      };
+    case "secondary":
+      return {
+        base: styles.secondary,
+        pressed: styles.secondaryPressed,
+      };
+    case "danger":
+      return {
+        base: styles.danger,
+        pressed: styles.dangerPressed,
+      };
+    case "primary":
+    default:
+      return {
+        base: styles.primary,
+        pressed: styles.primaryPressed,
+      };
+  }
+}
+
 const styles = StyleSheet.create({
   btn: {
-    borderRadius: theme.radius.md,
+    borderRadius: radius.md,
     paddingVertical: 14,
-    paddingHorizontal: 14,
+    paddingHorizontal: 16,
+    alignItems: "center",
+    justifyContent: "center",
+    overflow: "hidden",
+  },
+  row: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+  },
+  iconWrap: {
+    width: 18,
+    height: 18,
     alignItems: "center",
     justifyContent: "center",
   },
+  spinner: { marginRight: 4 },
+
   primary: {
-    backgroundColor: theme.colors.gold,
-    ...theme.shadow.glowGold,
-  },
-  outline: {
-    backgroundColor: "transparent",
+    backgroundColor: palette.gold,
     borderWidth: 1,
-    borderColor: theme.colors.borderGold,
+    borderColor: palette.goldHigh,
+    ...shadow.glowGold,
   },
-  text: {
-    color: "#111",
-    fontSize: 15,
-    fontWeight: "900",
-    letterSpacing: 0.3,
+  primaryPressed: {
+    backgroundColor: palette.goldDeep,
+    transform: [{ translateY: 1 }],
   },
-  textOutline: {
-    color: theme.colors.gold,
+  /** Faux-gradient: a thin bright stripe on top of the gold fill */
+  primaryHighlight: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    top: 0,
+    height: "55%",
+    backgroundColor: "rgba(255,255,255,0.18)",
   },
-  pressed: { opacity: 0.92 },
+
+  outline: {
+    backgroundColor: "rgba(245,200,66,0.06)",
+    borderWidth: 1,
+    borderColor: palette.borderGoldStrong,
+  },
+  outlinePressed: {
+    backgroundColor: "rgba(245,200,66,0.14)",
+  },
+
+  secondary: {
+    backgroundColor: palette.bg2,
+    borderWidth: 1,
+    borderColor: palette.hairline,
+  },
+  secondaryPressed: {
+    backgroundColor: "#181818",
+  },
+
+  danger: {
+    backgroundColor: palette.danger,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.18)",
+    ...shadow.glowDanger,
+  },
+  dangerPressed: {
+    backgroundColor: "#e35454",
+    transform: [{ translateY: 1 }],
+  },
+
   disabled: { opacity: 0.45 },
 });
-

@@ -16,7 +16,8 @@
     "build": "node -e \"console.log('[build] backend ready (no compile step)')\"",
     "test:resend": "node scripts/test-resend.cjs",
     "test:paypal": "node scripts/verify-paypal-oauth.cjs",
-    "test:security": "node tests/securityPolicy.test.mjs"
+    "test:security": "node tests/securityPolicy.test.mjs",
+    "bootstrap-super-admin": "node scripts/setSuperAdminPassword.mjs --generate"
   },
   "dependencies": {
     "@paypal/checkout-server-sdk": "^1.0.3",

@@ -25,9 +25,10 @@ function parseTimeToMinutes(t) {
  * @param {string} timeStr HH:MM or HH:MM:SS
  * @returns {Promise<{ ok: boolean, message?: string }>}
  */
-export async function assertSlotWithinAvailability(barberId, dateStr, timeStr) {
-  const bid = Number(barberId);
-  if (!Number.isFinite(bid)) return { ok: false, message: "Invalid barber" };
+export async function assertSlotWithinAvailability(barberId, dateStr, timeStr, barberName = "") {
+  const { coerceBarberIdForTable } = await import("./barberIdentity.cjs");
+  const bid = await coerceBarberIdForTable(dbQuery, "barber_availability", barberId, barberName);
+  if (bid == null) return { ok: false, message: "Invalid barber" };
 
   const r = await dbQuery(
     `SELECT day_of_week, start_time, end_time, is_off
@@ -76,8 +77,8 @@ export async function ensureBarberForUser(userId) {
   const existing = await dbQuery(`SELECT barber_id FROM app_users WHERE id = $1::uuid LIMIT 1`, [uid]);
   const linked = existing.rows?.[0]?.barber_id;
   if (linked != null) {
-    const check = await dbQuery(`SELECT id FROM barbers WHERE id = $1 LIMIT 1`, [Number(linked)]);
-    if (check.rows?.length) return Number(linked);
+    const check = await dbQuery(`SELECT id FROM barbers WHERE id::text = $1 LIMIT 1`, [String(linked)]);
+    if (check.rows?.length) return check.rows[0].id;
   }
 
   const u = await dbQuery(`SELECT name, email FROM app_users WHERE id = $1::uuid LIMIT 1`, [uid]);
@@ -91,13 +92,13 @@ export async function ensureBarberForUser(userId) {
   const newId = ins.rows?.[0]?.id;
   if (newId == null) throw new Error("barber_create_failed");
 
-  await dbQuery(`UPDATE app_users SET barber_id = $1 WHERE id = $2::uuid`, [Number(newId), uid]);
+  await dbQuery(`UPDATE app_users SET barber_id = $1 WHERE id = $2::uuid`, [newId, uid]);
   await dbQuery(
     `INSERT INTO barber_settings (barber_id) VALUES ($1) ON CONFLICT (barber_id) DO NOTHING`,
-    [Number(newId)],
+    [newId],
   );
 
-  return Number(newId);
+  return newId;
 }
 
 /**
@@ -108,22 +109,58 @@ export async function ensureBarberForUser(userId) {
 export async function resolveScopedBarberId(user, queryBarberId) {
   const role = String(user?.role || "").trim();
   const raw = queryBarberId != null ? String(queryBarberId).trim() : "";
-  const parsed = raw ? Number(raw) : NaN;
+  const isGlobalAdmin =
+    role === "super_admin" || role === "admin" || user?.isSuperAdmin === true || user?.isOwner === true;
 
-  if (role === "super_admin" || role === "admin") {
-    if (!Number.isFinite(parsed)) {
-      return { error: "barber_id_required", status: 400, message: "Admin must pass barberId (query or body)." };
+  async function lookupBarberId(idText) {
+    const r = await dbQuery(`SELECT id FROM barbers WHERE id::text = $1 LIMIT 1`, [idText]);
+    return r.rows?.[0]?.id ?? null;
+  }
+
+  if (isGlobalAdmin) {
+    if (!raw) {
+      return {
+        error: "barber_id_required",
+        status: 400,
+        message: "Pass barberId or barber_id (query or body).",
+      };
     }
-    const ok = await dbQuery(`SELECT id FROM barbers WHERE id = $1 LIMIT 1`, [parsed]);
-    if (!ok.rows?.length) {
+    const id = await lookupBarberId(raw);
+    if (id == null) {
       return { error: "barber_not_found", status: 404, message: "Barber not found." };
     }
-    return { barberId: parsed };
+    return { barberId: id };
   }
 
   if (role === "barber") {
     const id = await ensureBarberForUser(String(user.id));
     return { barberId: id };
+  }
+
+  if (role === "shop_owner") {
+    if (!raw) {
+      return {
+        error: "barber_id_required",
+        status: 400,
+        message: "Pass barberId or barber_id (query or body).",
+      };
+    }
+    const shop = await dbQuery(
+      `SELECT u.business_id FROM app_users u WHERE u.id = $1::uuid AND u.role = 'shop_owner' LIMIT 1`,
+      [String(user.id)],
+    );
+    const bizId = shop.rows?.[0]?.business_id;
+    if (bizId == null) {
+      return { error: "forbidden", status: 403, message: "Shop owner account is not linked to a business." };
+    }
+    const ok = await dbQuery(
+      `SELECT id FROM barbers WHERE id::text = $1 AND business_id = $2 LIMIT 1`,
+      [raw, Number(bizId)],
+    );
+    if (!ok.rows?.length) {
+      return { error: "forbidden", status: 403, message: "That barber is not in your shop." };
+    }
+    return { barberId: ok.rows[0].id };
   }
 
   return { error: "forbidden", status: 403, message: "Client accounts cannot manage barber settings." };
@@ -147,7 +184,10 @@ export async function resolveScopedBarberId(user, queryBarberId) {
  *   billing_subscription_id: string | null,
  * }>}
  */
-export async function loadBarberSettingsRow(barberId) {
+export async function loadBarberSettingsRow(barberId, barberName = "") {
+  const { coerceBarberIdForTable } = await import("./barberIdentity.cjs");
+  const bid = await coerceBarberIdForTable(dbQuery, "barber_settings", barberId, barberName);
+  const settingsKey = bid ?? barberId;
   const r = await dbQuery(
     `SELECT theme_color, booking_deposit_enabled, deposit_amount::float8 AS deposit_amount,
             payment_method, aura_enabled, aura_voice_type, language,
@@ -157,7 +197,7 @@ export async function loadBarberSettingsRow(barberId) {
      FROM barber_settings
      WHERE barber_id = $1
      LIMIT 1`,
-    [barberId],
+    [settingsKey],
   );
   const row = r.rows?.[0];
   if (!row) {
@@ -236,10 +276,11 @@ export async function loadBarberDepositPricingOpts(barberId) {
  * @returns {Promise<number | null>}
  */
 export async function resolveOrCreateBarberClientId(barberId, customerName, customerEmail) {
-  const bid = Number(barberId);
+  const { coerceBarberIdForTable } = await import("./barberIdentity.cjs");
+  const bid = await coerceBarberIdForTable(dbQuery, "barber_clients", barberId);
   const em = String(customerEmail || "").trim();
   const nm = String(customerName || "").trim();
-  if (!Number.isFinite(bid) || !em) return null;
+  if (bid == null || !em) return null;
 
   const found = await dbQuery(
     `SELECT id FROM barber_clients
@@ -275,7 +316,7 @@ export async function buildPublicBarberPricingResponse(barberId) {
   const barber_platform_fee_per_booking_usd = 0.99;
 
   const svc = await dbQuery(
-    `SELECT id, name, price::float8 AS price, duration_minutes, is_active
+    `SELECT id, name, description, icon, price::float8 AS price, duration_minutes, is_active
      FROM barber_services
      WHERE barber_id = $1 AND is_active = true
      ORDER BY id ASC

@@ -1,0 +1,152 @@
+IFCDC Barbers — Fix “signing key mismatch” on Google Play
+=========================================================
+
+Google Play expects every new .aab to be signed with the SAME upload key that
+was used for the first successful upload. Do NOT create a new keystore for
+the same app id (com.ifcdc.barbers).
+
+--------------------------------------------------
+FINGERPRINTS FOR THIS PROJECT (from Play Console error)
+--------------------------------------------------
+
+Play expects UPLOAD certificate SHA1 (use a keystore that prints EXACTLY this):
+
+  7F:5A:F4:AE:44:C6:59:50:D6:96:85:E6:DE:F0:7E:DD:49:A4:EB:14
+
+Your last uploaded .aab was signed with (WRONG — do not use this cert for Play
+until you either switch keystores or reset the upload key with Google):
+
+  F4:19:8F:EE:04:DE:84:06:E3:22:65:6D:D8:5F:16:18:18:36:70:CD
+
+Conclusion: the keystore currently used by EAS (Expo remote credentials, or
+your local credentials.json) is NOT the same key Play has on file. Expo is
+signing with a different certificate than the upload key registered in Play.
+
+WHAT TO DO (pick one path):
+
+  (1) RECOVER CORRECT KEY — Find any backup .jks/.keystore whose SHA1 is
+      7F:5A:... (verify with repo script, see section E). Then either:
+      • Upload that keystore to Expo: expo.dev → project → Credentials →
+        Android → Production → update/replace keystore, OR
+      • Use credentials.json + credentialsSource "local" (see section B).
+
+  (2) KEY LOST — If no file produces 7F:5A:..., you cannot “fix” signing without
+      Google Play Console → App integrity → Request upload key reset, then
+      registering your current signing certificate (the F4:19:... one) per
+      Google’s instructions. That changes what Play expects; use only after
+      you accept that the old upload key is abandoned.
+
+--------------------------------------------------
+A) First upload was EAS “keystore in the cloud” (typical for this project)
+--------------------------------------------------
+
+EAS CLI commands (eas-cli 18+):
+
+  • Manage Android credentials (interactive menus) — NO --profile flag:
+      cd mobile
+      npx eas-cli credentials -p android
+
+  • Configure credentials for a specific eas.json build profile (e.g. production):
+      cd mobile
+      npx eas-cli credentials:configure-build -p android -e production
+
+  Wrong (flags do not exist on `credentials`):
+      eas credentials --platform android --profile production
+
+There is no .jks file in the git repo. The original upload key is stored on
+Expo for this EAS project.
+
+1) Open: https://expo.dev/accounts/ifcdc696/projects/ifcdc-barbers/credentials
+
+2) Under Android → Production, confirm an Android Keystore exists and note:
+   - Key alias
+   - Whether you (or anyone) clicked “Remove” / “Set up new keystore” after
+     the first Play upload. If a NEW keystore was created on Expo after Play
+     already had the old upload certificate, Play will reject the .aab until
+     you either:
+   - Restore the old Expo credentials (only possible if Expo support / backup),
+     OR
+   - Use Google Play Console → App integrity → Request upload key reset, then
+     register the NEW upload certificate (follow Google’s flow exactly).
+
+3) Rebuild from the mobile app folder so EAS uses REMOTE credentials:
+
+   cd mobile
+   npx eas-cli build --platform android --profile production
+
+   eas.json is set to credentialsSource: "remote" for production so the build
+   uses the keystore on Expo’s servers, not a random local key.
+
+4) versionCode: with "appVersionSource": "remote" in eas.json, EAS takes the
+   next versionCode from Google Play after the last successful upload. You do
+   not need to hand-edit versionCode for each build unless you switch away
+   from remote versioning. If you must set it in app.json, only do that after
+   reading Expo’s “App versions” docs to avoid conflicting with remote.
+
+--------------------------------------------------
+B) You have the ORIGINAL .jks or .keystore FILE (local upload key)
+--------------------------------------------------
+
+1) Put the file under mobile/keys/ (e.g. mobile/keys/upload.keystore).
+   Never commit it; keys/ is gitignored.
+
+2) Copy credentials.json.example to credentials.json and fill:
+   - keystorePath (path relative to mobile/, e.g. ./keys/upload.keystore)
+   - keystorePassword
+   - keyAlias
+   - keyPassword (often same as keystore password)
+
+3) In eas.json, for profile production only, change:
+
+   "credentialsSource": "remote"
+
+   to:
+
+   "credentialsSource": "local"
+
+4) Build:
+
+   cd mobile
+   npx eas-cli build --platform android --profile production
+
+5) After Play accepts a build, you can move credentials back to "remote" only
+   if you upload the same keystore to Expo credentials (Expo dashboard) so
+   remote and local stay identical.
+
+--------------------------------------------------
+C) Verify the .aab before uploading
+--------------------------------------------------
+
+After EAS finishes, download the .aab. Optional checks:
+
+- jarsigner -verify -verbose -certs app-release.aab
+- Compare certificate fingerprints with Play Console → App integrity → App
+  signing key / Upload key certificate (fingerprint must match UPLOAD key).
+
+--------------------------------------------------
+D) If you are unsure which case applies
+--------------------------------------------------
+
+- If you ONLY ever installed from EAS Build and never touched local Gradle
+  release signing → use section A.
+- If you or a teammate built a release .aab in Android Studio with another
+  keystore → you need that exact keystore (section B) OR a Play upload key
+  reset if that keystore is lost.
+
+--------------------------------------------------
+E) Verify a .jks / .keystore file matches Play (7F:5A:...)
+--------------------------------------------------
+
+From the repo root (requires JDK `keytool` on PATH):
+
+  ANDROID_KEYSTORE_PATH=/absolute/path/to/your.jks \
+  ANDROID_KEYSTORE_PASSWORD=... \
+  ANDROID_KEY_ALIAS=... \
+  ANDROID_KEY_PASSWORD=... \
+  npm run verify:android-keystore
+
+When the script reports SHA1 = 7F:5A:F4:AE:44:C6:59:50:D6:96:85:E6:DE:F0:7E:DD:49:A4:EB:14,
+that file is the one to register on Expo credentials (remote) or in
+credentials.json (local), then run:
+
+  cd mobile && npx eas-cli build --platform android --profile production

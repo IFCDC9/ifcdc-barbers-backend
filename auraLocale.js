@@ -124,8 +124,8 @@ export function localizedUnclearFallback(lang) {
 
 export function localizedKeywordFallback(lang) {
   return normalizeBarberLang(lang) === "es"
-    ? "Diga reservar corte, pida estilos, o pregunte por precios."
-    : "Say book a haircut, ask for styles, or ask for pricing.";
+    ? "Estoy aquí para reservas, horarios, dirección, servicios y precios. Pregunte por horarios, reservar corte o estilos."
+    : "I'm here for bookings, shop hours, directions, services, and pricing. Ask about hours, booking a haircut, or styles.";
 }
 
 /** Chat: keyword fast-path replies (server.js). */

@@ -84,7 +84,7 @@ const PaymentScreen = ({
         data = (await response.json()) as any;
       } catch (parseErr) {
         console.log("[payment] appointments JSON parse failed:", parseErr);
-        throw new Error("Server returned invalid response");
+        throw new Error("Action could not be completed right now. Please try again.");
       }
 
       const bookingId =
@@ -100,22 +100,29 @@ const PaymentScreen = ({
             message: data?.message || data?.error,
           });
         }
-        throw new Error(data?.message || data?.error || 'Booking creation failed');
+        throw new Error(data?.message || data?.error || 'Action could not be completed right now. Please try again.');
       }
       setBookingId(String(bookingId));
       setCheckoutReady(true);
       reportConnectionRecovered();
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Booking creation failed';
-      console.log('[payment] createBooking failed:', message);
+      const rawMessage = error instanceof Error ? error.message : '';
+      console.log('[payment] createBooking failed:', rawMessage);
+      const looksLikeDevText =
+        !rawMessage ||
+        /undefined|null|not_found|localhost|127\.0\.0\.1|http:\/\//i.test(rawMessage) ||
+        rawMessage.length > 160;
+      const message = looksLikeDevText
+        ? 'Action could not be completed right now. Please try again.'
+        : rawMessage;
       if (!failureAlreadyReported) {
         reportConnectionFailure({
           kind: 'network',
           url: apiFullUrl("/api/appointments"),
-          message,
+          message: rawMessage,
         });
       }
-      Alert.alert('Booking Failed', message);
+      Alert.alert('Booking', message);
     } finally {
       setIsCreatingBooking(false);
     }

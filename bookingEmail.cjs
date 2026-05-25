@@ -125,6 +125,8 @@ function bookingEmailLabels(language) {
       lblName: "Nombre",
       lblBarber: "Barbero",
       lblService: "Servicio",
+      lblServicePrice: "Precio del servicio",
+      lblServiceDuration: "Duración",
       lblDate: "Fecha",
       lblTime: "Hora",
       lblDepositPaid: "Depósito pagado",
@@ -144,6 +146,8 @@ function bookingEmailLabels(language) {
     lblName: "Name",
     lblBarber: "Barber",
     lblService: "Service",
+    lblServicePrice: "Service price",
+    lblServiceDuration: "Duration",
     lblDate: "Date",
     lblTime: "Time",
     lblDepositPaid: "Deposit paid",
@@ -194,6 +198,8 @@ async function sendBookingEmail({
   name,
   email,
   service,
+  servicePrice,
+  serviceDuration,
   date,
   time,
   paymentId,
@@ -232,6 +238,15 @@ async function sendBookingEmail({
   const labels = bookingEmailLabels(language);
   const isDeposit = String(paymentType || "").toLowerCase() === "deposit";
   const fmt = (n) => (Number.isFinite(Number(n)) ? Number(n).toFixed(2) : "—");
+  const servicePriceLine =
+    Number.isFinite(Number(servicePrice)) && Number(servicePrice) > 0
+      ? `<p>${labels.lblServicePrice}: $${fmt(servicePrice)} USD</p>`
+      : "";
+  const durationMins = Number(serviceDuration);
+  const serviceDurationLine =
+    Number.isFinite(durationMins) && durationMins > 0
+      ? `<p>${labels.lblServiceDuration}: ${Math.round(durationMins)} min</p>`
+      : "";
   const tip = Number(tipAmount) || 0;
   const totalCharged = Number.isFinite(Number(totalPaid)) ? Number(totalPaid) : (Number(amountPaid) || 0) + tip;
   const tipLine =
@@ -251,6 +266,8 @@ async function sendBookingEmail({
 <p>${labels.lblName}: ${safeName}</p>
 ${safeBarber ? `<p>${labels.lblBarber}: ${safeBarber}</p>` : ""}
 <p>${labels.lblService}: ${safeService}</p>
+${servicePriceLine}
+${serviceDurationLine}
 <p>${labels.lblDate}: ${safeDate}</p>
 <p>${labels.lblTime}: ${safeTime}</p>
 ${payLines}
@@ -279,7 +296,7 @@ ${safePay ? `<p>${labels.lblPayRef}: ${safePay}</p>` : ""}
       : `Paid in full $${fmt(amountPaid ?? totalPrice)} / tip $${fmt(tip)} / charged $${fmt(totalCharged)}`;
     const adminHtml = `<p>New booking (${isDeposit ? "deposit" : "full"})</p><p>Name: ${safeName}</p>${
       safeBarber ? `<p>Barber: ${safeBarber}</p>` : ""
-    }<p>Service: ${safeService}</p><p>Date: ${safeDate}</p><p>Time: ${safeTime}</p><p>${adminPay}</p><p>PayPal ref: ${
+    }<p>Service: ${safeService}</p>${servicePriceLine}${serviceDurationLine}<p>Date: ${safeDate}</p><p>Time: ${safeTime}</p><p>${adminPay}</p><p>PayPal ref: ${
       safePay || "n/a"
     }</p>`;
     const adminPlain = htmlToPlainText(adminHtml);

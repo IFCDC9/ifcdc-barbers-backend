@@ -11,13 +11,23 @@ export type NotificationDebugState = {
   error?: string | null;
 };
 
+const DEFAULT_CHANNEL_ID = "default";
+
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldShowAlert: true,
-    shouldPlaySound: false,
+    shouldPlaySound: true,
     shouldSetBadge: false,
   }),
 });
+
+async function ensureDefaultNotificationChannelAsync() {
+  if (Device.osName !== "Android") return;
+  await Notifications.setNotificationChannelAsync(DEFAULT_CHANNEL_ID, {
+    name: "default",
+    importance: Notifications.AndroidImportance.MAX,
+  });
+}
 
 export async function registerForPushNotificationsAsync(): Promise<NotificationDebugState> {
   const state: NotificationDebugState = {
@@ -48,13 +58,7 @@ export async function registerForPushNotificationsAsync(): Promise<NotificationD
       return state;
     }
 
-    // Android: ensure a channel exists.
-    if (Device.osName === "Android") {
-      await Notifications.setNotificationChannelAsync("default", {
-        name: "default",
-        importance: Notifications.AndroidImportance.MAX,
-      });
-    }
+    await ensureDefaultNotificationChannelAsync();
 
     // Prefer projectId when available (newer Expo recommends this).
     const projectId =
@@ -93,13 +97,36 @@ export function addNotificationListeners(opts: {
 }
 
 export async function triggerLocalTestNotificationAsync() {
-  return await Notifications.scheduleNotificationAsync({
-    content: {
-      title: "IFCDC Barbers",
-      body: "Local notification test",
-      data: { kind: "local_test" },
-    },
-    trigger: { seconds: 1 },
-  });
+  try {
+    await ensureDefaultNotificationChannelAsync();
+
+    const perms = await Notifications.getPermissionsAsync();
+    if (perms.status !== "granted") {
+      const req = await Notifications.requestPermissionsAsync();
+      if (req.status !== "granted") {
+        throw new Error(
+          "Notification permission is required. Enable alerts in your device settings and try again."
+        );
+      }
+    }
+
+    return await Notifications.scheduleNotificationAsync({
+      content: {
+        title: "IFCDC Test Notification",
+        body: "Your notification system is working.",
+        sound: true,
+        data: { kind: "local_test" },
+      },
+      trigger: null,
+    });
+  } catch (e) {
+    const message =
+      e instanceof Error
+        ? e.message
+        : typeof e === "string"
+          ? e
+          : "Could not send test notification.";
+    throw new Error(message);
+  }
 }
 

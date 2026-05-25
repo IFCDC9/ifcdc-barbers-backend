@@ -5,18 +5,47 @@
 const express = require("express");
 const path = require("node:path");
 const paypalSdk = require("@paypal/checkout-server-sdk");
+const {
+  resolveServiceForBooking,
+  resolveBarberIdentity,
+  scheduleBarberIdFromResolved,
+  barberIdForTable,
+  stripQuotes,
+} = require("./bookingServicesCatalog.cjs");
+const {
+  BARBER_RESOLVE_MSG,
+  isBarberIdentityDbError,
+  logDbInsertDebug,
+  assertNotUuidForBigintBarberId,
+  resolvedBarberDbIdOnly,
+  getTableBarberIdType,
+  coerceBarberIdForTable,
+  logBookingInsertSuccess,
+} = require("./barberIdentity.cjs");
+const { handlePublicBarberServicesGet, handlePublicBarbersListGet } = require("./bookingPublicHandlers.cjs");
 
 const router = express.Router();
 
 const DEFAULT_HAIRCUT_USD = Number(process.env.APP_BOOKING_HAIRCUT_USD || 25);
 const DEFAULT_PLATFORM_FEE = 0.99;
 
-function stripQuotes(s) {
-  let t = String(s ?? "").trim();
-  if ((t.startsWith('"') && t.endsWith('"')) || (t.startsWith("'") && t.endsWith("'"))) {
-    t = t.slice(1, -1).trim();
+let cachedBarbersIdType = null;
+async function getBarbersIdColumnTypeCached() {
+  if (cachedBarbersIdType) return cachedBarbersIdType;
+  const mod = await import(path.join(__dirname, "barberScheduleMigrations.js"));
+  cachedBarbersIdType = await mod.getBarbersIdColumnType();
+  return cachedBarbersIdType;
+}
+
+function bookingStartErrorResponse(res, err) {
+  if (isBarberIdentityDbError(err)) {
+    return res.status(400).json({
+      success: false,
+      error: "barber_unresolved",
+      message: BARBER_RESOLVE_MSG,
+    });
   }
-  return t;
+  return null;
 }
 
 function round2(n) {
@@ -24,21 +53,81 @@ function round2(n) {
 }
 
 function formatPayPalFailure(err) {
-  if (err == null) return { message: "Unknown PayPal error", code: null, httpStatus: 502 };
+  if (err == null) return { message: "Unknown PayPal error", code: "paypal_error", httpStatus: 502, body: null };
   const raw = err instanceof Error ? err.message : String(err);
   const fromSdk = Number(err?.statusCode ?? err?.status ?? 0) || null;
   try {
     const j = JSON.parse(raw);
     const paypalCode = j.error || j.name;
-    const desc = j.error_description || j.message || raw;
+    const desc = j.error_description || j.message || j.details?.[0]?.description || raw;
+    if (paypalCode === "invalid_client") {
+      return {
+        code: "invalid_client",
+        message:
+          "PayPal rejected client credentials (invalid_client). Use PAYPAL_CLIENT_ID + PAYPAL_CLIENT_SECRET from the SAME app.",
+        httpStatus: fromSdk && fromSdk >= 400 ? fromSdk : 401,
+        body: j,
+      };
+    }
     return {
       code: paypalCode || "paypal_error",
       message: String(desc),
       httpStatus: fromSdk && fromSdk >= 400 ? fromSdk : 502,
+      body: j,
     };
   } catch {
-    return { code: null, message: raw, httpStatus: fromSdk && fromSdk >= 400 ? fromSdk : 502 };
+    if (/invalid_client/i.test(raw)) {
+      return {
+        code: "invalid_client",
+        message: "PayPal invalid_client: client ID and secret must match PAYPAL_ENV (sandbox vs live).",
+        httpStatus: fromSdk && fromSdk >= 400 ? fromSdk : 401,
+        body: { raw: raw.slice(0, 2000) },
+      };
+    }
+    return {
+      code: err?.code || "paypal_error",
+      message: raw,
+      httpStatus: fromSdk && fromSdk >= 400 ? fromSdk : 502,
+      body: { raw: raw.slice(0, 2000) },
+    };
   }
+}
+
+function extractPayPalErrorFull(err) {
+  const formatted = formatPayPalFailure(err);
+  return {
+    code: formatted.code,
+    message: formatted.message,
+    httpStatus: formatted.httpStatus,
+    statusCode: err?.statusCode ?? err?.status ?? null,
+    body: formatted.body,
+    stack: err instanceof Error ? err.stack : undefined,
+  };
+}
+
+function getPayPalEnvironmentMeta() {
+  const live = isPayPalLive();
+  const mode = live ? "live" : "sandbox";
+  const clientId = normalizePayPalEnvValue(process.env.PAYPAL_CLIENT_ID);
+  return {
+    environment: mode,
+    apiBase: live ? "https://api-m.paypal.com" : "https://api-m.sandbox.paypal.com",
+    clientIdSet: Boolean(clientId),
+    secretSet: Boolean(getPayPalSecret()),
+    clientIdPreview: clientId.length > 12 ? `${clientId.slice(0, 8)}…${clientId.slice(-4)}` : clientId || null,
+    PAYPAL_ENV: normalizePayPalEnvValue(process.env.PAYPAL_ENV),
+    PAYPAL_MODE: normalizePayPalEnvValue(process.env.PAYPAL_MODE),
+  };
+}
+
+function assertValidPayPalAmount(label, value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) {
+    const err = new Error(`Invalid PayPal ${label}: ${value}`);
+    err.code = "invalid_amount";
+    throw err;
+  }
+  return round2(n);
 }
 
 function extractCaptureIdFromOrder(capture) {
@@ -134,6 +223,10 @@ async function loadDb() {
   return { dbQuery };
 }
 
+async function loadSlotEngine() {
+  return import(path.join(__dirname, "barberSlotEngine.js"));
+}
+
 async function loadTier() {
   const mod = await import(path.join(__dirname, "subscriptionTier.js"));
   return Number(mod.BARBER_PLATFORM_FEE_USD ?? DEFAULT_PLATFORM_FEE);
@@ -141,7 +234,28 @@ async function loadTier() {
 
 router.get("/health", (_req, res) => {
   res.set("Cache-Control", "no-store");
-  res.json({ ok: true });
+  res.json({ ok: true, paypal: getPayPalEnvironmentMeta() });
+});
+
+/** Bookable barbers from Postgres (source of truth for checkout). */
+router.get("/barbers", async (req, res) => {
+  try {
+    const { dbQuery } = await loadDb();
+    return await handlePublicBarbersListGet(req, res, dbQuery);
+  } catch (e) {
+    console.error("[app-bookings] barbers:", e?.message || e);
+    res.status(500).json({ ok: false, error: "barbers_failed", message: e?.message || String(e) });
+  }
+});
+
+router.get("/services", async (req, res) => {
+  try {
+    const { dbQuery } = await loadDb();
+    return await handlePublicBarberServicesGet(req, res, dbQuery);
+  } catch (e) {
+    console.error("[app-bookings] services:", e?.message || e);
+    return res.status(500).json({ ok: false, error: "services_failed", message: e?.message || String(e) });
+  }
 });
 
 router.get("/start", (_req, res) =>
@@ -156,42 +270,87 @@ router.get("/start", (_req, res) =>
     }),
 );
 
+async function resolveAvailableSlotsQuery(req) {
+  const barberName = stripQuotes(req.query.barberName);
+  const dateLabel = stripQuotes(req.query.dateLabel);
+  const dateRaw = stripQuotes(req.query.date);
+  const barberIdRaw = stripQuotes(req.query.barberId ?? req.query.barberUuid);
+
+  let dateStr = null;
+  if (dateRaw && /^\d{4}-\d{2}-\d{2}$/.test(dateRaw)) dateStr = dateRaw;
+  else if (dateLabel) dateStr = resolveDateLabelToYmd(dateLabel);
+
+  const { dbQuery } = await loadDb();
+  const barbersIdType = await getBarbersIdColumnTypeCached();
+  const resolved = await resolveBarberIdentity(dbQuery, barberIdRaw || null, barberName);
+  if (!resolved) {
+    return { dateStr, barberId: null, barberName, barberRow: null, resolved: null };
+  }
+
+  const scheduleId = scheduleBarberIdFromResolved(resolved, barbersIdType);
+  return {
+    dateStr,
+    barberId: scheduleId,
+    barberName: resolved.barberName,
+    barberRow: resolved.barberRow,
+    resolved,
+  };
+}
+
+router.get("/available-slots", async (req, res) => {
+  try {
+    const { dateStr, barberId, barberName, resolved } = await resolveAvailableSlotsQuery(req);
+    if (!dateStr) {
+      return res.status(400).json({ ok: false, error: "bad_date", message: "Pass date=YYYY-MM-DD or dateLabel=Today" });
+    }
+    if (!resolved && !barberName) {
+      return res.status(400).json({ ok: false, error: "query_required", message: "barberId or barberName required" });
+    }
+    if (!resolved || barberId == null) {
+      return res.status(400).json({
+        ok: false,
+        error: "barber_unresolved",
+        message: BARBER_RESOLVE_MSG,
+      });
+    }
+    const slotEngine = await loadSlotEngine();
+    const payload = await slotEngine.getAvailableSlotsForBarberDate(barberId, dateStr, resolved.barberName);
+    return res.json({ ok: true, date: dateStr, barberId, ...payload });
+  } catch (e) {
+    console.error("[app-bookings] available-slots:", e?.stack || e);
+    const barberErr = bookingStartErrorResponse(res, e);
+    if (barberErr) return barberErr;
+    return res.status(500).json({ ok: false, error: "server_error", message: "Unable to load available times." });
+  }
+});
+
 router.get("/occupied-slots", async (req, res) => {
   try {
     const barberName = stripQuotes(req.query.barberName);
     const dateLabel = stripQuotes(req.query.dateLabel);
-    if (!barberName || !dateLabel) {
-      return res.status(400).json({ ok: false, error: "query_required", message: "barberName and dateLabel required" });
+    const barberIdRaw = stripQuotes(req.query.barberId ?? req.query.barberUuid);
+    if ((!barberName && !barberIdRaw) || !dateLabel) {
+      return res.status(400).json({ ok: false, error: "query_required", message: "barberId or barberName and dateLabel required" });
     }
     const dateStr = resolveDateLabelToYmd(dateLabel);
     if (!dateStr) {
       return res.status(400).json({ ok: false, error: "bad_date_label", message: "Unrecognized dateLabel" });
     }
     const { dbQuery } = await loadDb();
-    const br = await dbQuery(
-      `SELECT id FROM barbers WHERE lower(trim(name)) = lower(trim($1)) ORDER BY id ASC LIMIT 1`,
-      [barberName],
-    );
-    const barberId = br.rows?.[0]?.id;
-    if (barberId == null) {
+    const barbersIdType = await getBarbersIdColumnTypeCached();
+    const resolved = await resolveBarberIdentity(dbQuery, barberIdRaw || null, barberName);
+    if (!resolved) {
       return res.json({ ok: true, times: [] });
     }
-    const r = await dbQuery(
-      `SELECT to_char(time, 'HH12:MI AM') AS slot
-       FROM bookings
-       WHERE barber_id = $1
-         AND date = $2::date
-         AND booking_status = 'confirmed'
-         AND is_paid_booking = true
-         AND payment_status IN ('paid', 'deposit_paid')
-       ORDER BY time`,
-      [barberId, dateStr],
-    );
-    const times = (r.rows || []).map((row) => String(row.slot || "").trim()).filter(Boolean);
+    const scheduleId = scheduleBarberIdFromResolved(resolved, barbersIdType);
+    const slotEngine = await loadSlotEngine();
+    const times = await slotEngine.loadOccupiedSlotLabels(scheduleId, dateStr, resolved.barberName);
     return res.json({ ok: true, times });
   } catch (e) {
     console.error("[app-bookings] occupied-slots:", e?.stack || e);
-    return res.status(500).json({ ok: false, error: "server_error", message: e instanceof Error ? e.message : String(e) });
+    const barberErr = bookingStartErrorResponse(res, e);
+    if (barberErr) return barberErr;
+    return res.status(500).json({ ok: false, error: "server_error", message: "Unable to load occupied slots." });
   }
 });
 
@@ -199,77 +358,186 @@ router.post("/start", async (req, res) => {
   try {
     const body = req.body || {};
     const barberName = stripQuotes(body.barberName);
+    const barberIdRaw = stripQuotes(body.barberId ?? body.barber_id);
+    const barberUuidRaw = stripQuotes(body.barberUuid ?? body.barber_uuid);
+    const barberLookupId = barberUuidRaw || barberIdRaw;
+
+    const { dbQuery } = await loadDb();
+
+    // Resolve barber identity FIRST — before slots, services, PayPal, or booking insert.
+    const resolved = await resolveBarberIdentity(dbQuery, barberLookupId || barberName || null, barberName);
+    if (!resolved) {
+      return res.status(400).json({
+        success: false,
+        error: "barber_unresolved",
+        message: BARBER_RESOLVE_MSG,
+      });
+    }
+
+    const bookingsColType = await getTableBarberIdType(dbQuery, "bookings");
+    const resolvedBarberDbId = resolvedBarberDbIdOnly(resolved);
+    const insertBarberId = await barberIdForTable(dbQuery, "bookings", resolved);
+    const serviceBarberKey = await barberIdForTable(dbQuery, "barber_services", resolved);
+    const scheduleId = await coerceBarberIdForTable(
+      dbQuery,
+      "barber_settings",
+      resolved.barberUuid ?? resolved.barberDbId,
+      resolved.barberName,
+    );
+
+    logDbInsertDebug({
+      route: req.path,
+      barberId: barberIdRaw,
+      barber_id: body.barber_id,
+      barberUuid: barberUuidRaw,
+      resolvedBarberDbId,
+      insertBarberId,
+      serviceBarberKey,
+      scheduleId,
+      bookingsColType,
+      payload: body,
+    });
+
+    if (insertBarberId == null) {
+      return res.status(400).json({
+        success: false,
+        error: "barber_unresolved",
+        message: BARBER_RESOLVE_MSG,
+      });
+    }
+    if (bookingsColType !== "uuid") {
+      assertNotUuidForBigintBarberId(insertBarberId, "bookings", req.path);
+    }
+    if (serviceBarberKey == null) {
+      return res.status(400).json({
+        success: false,
+        error: "barber_unresolved",
+        message: BARBER_RESOLVE_MSG,
+      });
+    }
+    if (scheduleId == null) {
+      return res.status(400).json({
+        success: false,
+        error: "barber_unresolved",
+        message: BARBER_RESOLVE_MSG,
+      });
+    }
+
+    console.log("[checkout] barber identity resolved", {
+      barberName: resolved.barberName,
+      resolvedBarberDbId,
+      barberUuid: resolved.barberUuid,
+      insertBarberId,
+      serviceBarberKey,
+      scheduleId,
+      bookingsColType,
+    });
+
     const dateLabel = stripQuotes(body.dateLabel);
     const timeLabel = stripQuotes(body.timeLabel);
     const redirectUri = stripQuotes(body.redirectUri);
     const cancelUri = stripQuotes(body.cancelUri);
     const customerName = stripQuotes(body.customerName) || "Mobile customer";
     const customerEmail = stripQuotes(body.customerEmail) || stripQuotes(process.env.APP_BOOKING_PLACEHOLDER_EMAIL) || "pending+app@ifcdc.local";
+    const serviceNameRaw = stripQuotes(body.serviceName ?? body.service_name);
+    const serviceIdRaw = body.serviceId ?? body.service_id;
+    const confirmedBarberName = resolved.barberName;
 
-    if (!barberName || !dateLabel || !timeLabel || !redirectUri) {
+    if ((!barberName && !barberLookupId) || !dateLabel || !timeLabel || !redirectUri) {
       return res.status(400).json({
         success: false,
         error: "missing_fields",
-        message: "barberName, dateLabel, timeLabel, and redirectUri are required",
+        message: "barberName or barberId, dateLabel, timeLabel, and redirectUri are required",
+      });
+    }
+
+    if (serviceIdRaw == null || String(serviceIdRaw).trim() === "") {
+      return res.status(400).json({
+        success: false,
+        error: "service_required",
+        message: "Select a service before checkout.",
       });
     }
 
     const dateStr = resolveDateLabelToYmd(dateLabel);
-    const timeSql = parseTimeLabelToSqlTime(timeLabel);
-    if (!dateStr || !timeSql) {
+    if (!dateStr) {
       return res.status(400).json({
         success: false,
         error: "bad_datetime",
-        message: "Could not parse dateLabel or timeLabel",
+        message: "Could not parse dateLabel",
       });
     }
 
-    const { dbQuery } = await loadDb();
-    const platformFee = round2(await loadTier());
-    const haircutPrice = round2(
-      Number.isFinite(Number(body.haircutPrice)) && Number(body.haircutPrice) > 0
-        ? Number(body.haircutPrice)
-        : DEFAULT_HAIRCUT_USD,
+    const slotEngine = await loadSlotEngine();
+    const slotCheck = await slotEngine.validateBookingSlot(scheduleId, dateStr, timeLabel, confirmedBarberName);
+    if (!slotCheck.ok) {
+      return res.status(409).json({
+        success: false,
+        error: slotCheck.code || "slot_unavailable",
+        message: slotCheck.message || "That time is not available.",
+      });
+    }
+    const timeSql = slotCheck.timeSql;
+
+    const serviceRow = await resolveServiceForBooking(
+      dbQuery,
+      serviceBarberKey,
+      serviceIdRaw,
+      serviceNameRaw,
+      confirmedBarberName,
     );
+    if (!serviceRow) {
+      return res.status(400).json({
+        success: false,
+        error: "unknown_service",
+        message: "Selected service is not available.",
+      });
+    }
+
+    const platformFee = round2(await loadTier());
+    const haircutPrice = round2(Number(serviceRow.price));
+    const serviceTitle = String(serviceRow.name || "Service").trim();
     const depositAmount = round2(Math.max(0, Number(body.depositAmount) || 0));
     const total = round2(haircutPrice + depositAmount + platformFee);
     const remainingBalance = round2(Math.max(0, haircutPrice - depositAmount));
     const barberPayout = round2(Math.max(0, haircutPrice - platformFee));
+    const tenantBiz = resolved.businessId;
 
-    const br = await dbQuery(
-      `SELECT id, name, business_id FROM barbers WHERE lower(trim(name)) = lower(trim($1)) ORDER BY id ASC LIMIT 1`,
-      [barberName],
-    );
-    const barberRow = br.rows?.[0];
-    if (!barberRow) {
-      return res.status(400).json({
-        success: false,
-        error: "unknown_barber",
-        message: `No barber named "${barberName}"`,
+    let ins;
+    try {
+      logDbInsertDebug({
+        route: req.path,
+        table: "bookings",
+        barberId: barberIdRaw,
+        barber_id: body.barber_id,
+        resolvedBarberDbId,
+        insertBarberId,
+        bookingsColType,
+        payload: body,
       });
-    }
-    const barberId = Number(barberRow.id);
-    const tenantBiz = barberRow.business_id != null ? Number(barberRow.business_id) : null;
-
-    const ins = await dbQuery(
+      if (bookingsColType !== "uuid") {
+        assertNotUuidForBigintBarberId(insertBarberId, "bookings", req.path);
+      }
+      ins = await dbQuery(
       `INSERT INTO bookings (
-         user_id, customer_name, customer_email, barber_name, barber_id, service, date, time, amount,
+         user_id, customer_name, customer_email, barber_name, barber_id, service, service_duration_minutes, date, time, amount,
          total_price, deposit_amount, amount_paid, remaining_balance, payment_type, payment_status, payment_provider,
          paypal_order_id, platform_fee, total_amount, booking_status, is_paid_booking,
          platform_fee_status, barber_payout_amount, barber_fee_billed, tip_amount, total_paid, business_id
        ) VALUES (
-         NULL, $1, $2, $3, $4, $5, $6::date, $7::time, $8,
-         $9, $10, 0, $11, 'full', 'pending', 'paypal',
-         NULL, $12, $13, 'pending', false,
-         'pending', $14, false, 0, 0, $15
+         NULL, $1, $2, $3, $4, $5, $6, $7::date, $8::time, $9,
+         $10, $11, 0, $12, 'full', 'pending', 'paypal',
+         NULL, $13, $14, 'pending', false,
+         'pending', $15, false, 0, 0, $16
        )
        RETURNING id`,
       [
         customerName,
         customerEmail,
-        barberName,
-        barberId,
-        "Haircut",
+        confirmedBarberName,
+        insertBarberId,
+        serviceTitle,
+        Number(serviceRow.duration_minutes) || 30,
         dateStr,
         timeSql,
         haircutPrice,
@@ -282,9 +550,71 @@ router.post("/start", async (req, res) => {
         Number.isFinite(tenantBiz) ? tenantBiz : null,
       ],
     );
+    } catch (insertErr) {
+      if (insertErr?.code === "23505") {
+        return res.status(409).json({
+          success: false,
+          error: "slot_taken",
+          message: "That time was just booked — pick another slot.",
+        });
+      }
+      const barberErr = bookingStartErrorResponse(res, insertErr);
+      if (barberErr) return barberErr;
+      throw insertErr;
+    }
     const bookingId = ins.rows?.[0]?.id;
     if (!bookingId) {
       return res.status(500).json({ success: false, error: "insert_failed", message: "Could not create booking row" });
+    }
+    logBookingInsertSuccess(bookingId);
+
+    const paypalAmount = assertValidPayPalAmount("total", total);
+    const amountString = paypalAmount.toFixed(2);
+    assertValidPayPalAmount("haircutPrice", haircutPrice);
+    assertValidPayPalAmount("platformFee", platformFee);
+
+  console.log("[paypal] checkout context", {
+      route: req.path,
+      payload: body,
+      resolvedBarber: {
+        name: confirmedBarberName,
+        dbId: resolvedBarberDbId,
+        uuid: resolved.barberUuid,
+        insertBarberId,
+      },
+      resolvedService: {
+        id: serviceRow.id,
+        name: serviceTitle,
+        price: haircutPrice,
+        duration: serviceRow.duration_minutes,
+      },
+      amounts: {
+        haircutPrice,
+        platformFee,
+        depositAmount,
+        total: paypalAmount,
+        amountString,
+      },
+      redirectUri,
+      cancelUri: cancelUri || redirectUri,
+      bookingId,
+      environment: getPayPalEnvironmentMeta(),
+    });
+
+    console.log("[paypal] creating order", {
+      amount: paypalAmount,
+      amountString,
+      barberId: insertBarberId,
+      serviceId: serviceRow.id,
+      environment: getPayPalEnvironmentMeta().environment,
+      apiBase: getPayPalEnvironmentMeta().apiBase,
+    });
+
+    if (isPayPalLive() && redirectUri && !String(redirectUri).startsWith("https://")) {
+      console.warn(
+        "[paypal] LIVE mode: return_url is not https — PayPal may reject order creation:",
+        redirectUri,
+      );
     }
 
     const client = getPayPalHttpClient();
@@ -298,7 +628,7 @@ router.post("/start", async (req, res) => {
           custom_id: String(bookingId),
           amount: {
             currency_code: "USD",
-            value: total.toFixed(2),
+            value: amountString,
           },
         },
       ],
@@ -317,6 +647,12 @@ router.post("/start", async (req, res) => {
       const response = await client.execute(request);
       const result = response.result;
       orderId = result?.id;
+      console.log("[paypal] create-order response", {
+        orderId,
+        status: result?.status,
+        linkRels: (result?.links || []).map((l) => l.rel),
+        environment: getPayPalEnvironmentMeta().environment,
+      });
       if (!orderId) {
         await dbQuery(`DELETE FROM bookings WHERE id = $1::uuid`, [bookingId]);
         return res.status(502).json({ success: false, error: "paypal_no_order_id", message: "PayPal did not return an order id" });
@@ -327,13 +663,22 @@ router.post("/start", async (req, res) => {
       );
       approveUrl = approve?.href || "";
       if (!approveUrl) {
+        console.error("[paypal] create-order missing approve link", { orderId, links: result?.links });
         await dbQuery(`DELETE FROM bookings WHERE id = $1::uuid`, [bookingId]);
         return res.status(502).json({ success: false, error: "paypal_no_approve_link", message: "PayPal did not return an approve URL" });
       }
 
       await dbQuery(`UPDATE bookings SET paypal_order_id = $1 WHERE id = $2::uuid`, [orderId, bookingId]);
+      console.log("[paypal] create-order success", { orderId, approveUrl: approveUrl.slice(0, 120) });
     } catch (pe) {
+      const paypalErr = extractPayPalErrorFull(pe);
+      console.error("[paypal] create-order FAILED", {
+        environment: getPayPalEnvironmentMeta(),
+        bookingId,
+        paypalError: paypalErr,
+      });
       await dbQuery(`DELETE FROM bookings WHERE id = $1::uuid`, [bookingId]).catch(() => {});
+      pe.paypalDetail = paypalErr;
       throw pe;
     }
 
@@ -347,15 +692,62 @@ router.post("/start", async (req, res) => {
       haircutPrice,
       depositAmount,
       bookingId,
+      serviceId: serviceRow.id,
+      serviceName: serviceTitle,
     });
   } catch (e) {
-    if (e?.code === "paypal_config") {
-      return res.status(503).json({ success: false, error: "paypal_config", message: e.message });
+    console.error("[app-bookings] start:", e?.stack || e);
+    if (e?.code === "barber_uuid_bigint_blocked") {
+      return res.status(400).json({
+        success: false,
+        error: "barber_unresolved",
+        message: BARBER_RESOLVE_MSG,
+      });
     }
-    const f = formatPayPalFailure(e);
-    console.error("[app-bookings] start:", f.message);
-    const status = Number(f.httpStatus) >= 400 && Number(f.httpStatus) < 600 ? f.httpStatus : 502;
-    return res.status(status).json({ success: false, error: f.code || "start_failed", message: f.message });
+    const barberErr = bookingStartErrorResponse(res, e);
+    if (barberErr) return barberErr;
+    if (e?.code === "paypal_config") {
+      return res.status(503).json({
+        success: false,
+        error: "paypal_config",
+        message: "PayPal is not configured on the server.",
+        paypal: getPayPalEnvironmentMeta(),
+      });
+    }
+    if (e?.code === "invalid_amount") {
+      return res.status(400).json({
+        success: false,
+        error: "invalid_amount",
+        message: "Invalid checkout amount. Please reselect your service.",
+      });
+    }
+    const isPayPalErr =
+      e?.paypalDetail ||
+      String(e?.message || "").includes("PayPal") ||
+      String(e?.statusCode || e?.status || "").match(/^[45]/);
+    if (isPayPalErr) {
+      const f = formatPayPalFailure(e);
+      console.error("[paypal] start checkout error", {
+        error: f.code,
+        message: f.message,
+        httpStatus: f.httpStatus,
+        body: f.body,
+        environment: getPayPalEnvironmentMeta(),
+      });
+      const status = Number(f.httpStatus) >= 400 && Number(f.httpStatus) < 600 ? f.httpStatus : 502;
+      return res.status(status).json({
+        success: false,
+        error: f.code || "start_failed",
+        message: f.message || "Unable to start checkout. Please try again.",
+        paypalDetail: f.body || e?.paypalDetail || null,
+        paypal: getPayPalEnvironmentMeta(),
+      });
+    }
+    return res.status(500).json({
+      success: false,
+      error: "server_error",
+      message: "Unable to start checkout. Please try again.",
+    });
   }
 });
 
@@ -391,8 +783,9 @@ router.post("/finalize", async (req, res) => {
 
     const { dbQuery } = await loadDb();
     const found = await dbQuery(
-      `SELECT id, barber_name, date, time, total_price, deposit_amount, remaining_balance, platform_fee, amount_paid,
-              payment_status, paypal_capture_id
+      `SELECT id, user_id, business_id, customer_name, customer_email, service, service_duration_minutes,
+              barber_id, barber_name, date, time, total_price, deposit_amount,
+              remaining_balance, platform_fee, amount_paid, payment_status, paypal_capture_id
        FROM bookings WHERE paypal_order_id = $1 LIMIT 1`,
       [orderID],
     );
@@ -423,6 +816,7 @@ router.post("/finalize", async (req, res) => {
           total,
           platformFee,
           haircutPrice,
+          service: row.service,
           captureId: row.paypal_capture_id,
         },
       });
@@ -447,6 +841,68 @@ router.post("/finalize", async (req, res) => {
       [row.id, captureId, total],
     );
 
+    try {
+      const { sendBookingEmail } = require("./bookingEmail.cjs");
+      await sendBookingEmail({
+        name: row.customer_name || "Guest",
+        email: row.customer_email,
+        service: row.service || "Haircut",
+        servicePrice: haircutPrice,
+        serviceDuration: row.service_duration_minutes,
+        date: String(row.date ?? ""),
+        time: String(row.time ?? ""),
+        paymentId: captureId,
+        barberName: row.barber_name,
+        totalPrice: haircutPrice,
+        depositAmount: depositPaid,
+        amountPaid: total,
+        remainingBalance,
+        paymentType: depositPaid > 0 ? "deposit" : "full",
+        totalPaid: total,
+      });
+      console.log("[app-bookings] confirmation email sent:", row.customer_email);
+    } catch (mailErr) {
+      console.warn("[app-bookings] confirmation email failed:", mailErr?.message || mailErr);
+    }
+
+    // Best-effort push fanout — never blocks PayPal capture flow.
+    try {
+      const pushNotifier = require("./pushNotifier.cjs");
+      const bookingPayload = {
+        id: row.id,
+        user_id: row.user_id || null,
+        customer_name: row.customer_name,
+        customer_email: row.customer_email,
+        barber_name: row.barber_name,
+        barber_id: row.barber_id,
+        business_id: row.business_id || null,
+        service: row.service,
+        date: row.date,
+        time: row.time,
+      };
+      // Customer gets confirmation; barber + shop owners get the new-booking alert.
+      void pushNotifier
+        .sendBookingPush({
+          dbQuery,
+          booking: bookingPayload,
+          kind: "booking_confirmation",
+          audience: ["customer"],
+          data: { bookingId: row.id },
+        })
+        .catch((e) => console.warn("[app-bookings] push (customer) failed:", e?.message || e));
+      void pushNotifier
+        .sendBookingPush({
+          dbQuery,
+          booking: bookingPayload,
+          kind: "new_booking_for_barber",
+          audience: ["barber", "shop_owners"],
+          data: { bookingId: row.id },
+        })
+        .catch((e) => console.warn("[app-bookings] push (barber) failed:", e?.message || e));
+    } catch (pushErr) {
+      console.warn("[app-bookings] push dispatcher unavailable:", pushErr?.message || pushErr);
+    }
+
     return res.json({
       verified: true,
       booking: {
@@ -459,6 +915,7 @@ router.post("/finalize", async (req, res) => {
         total,
         platformFee,
         haircutPrice,
+        service: row.service,
         captureId,
       },
     });

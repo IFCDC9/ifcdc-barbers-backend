@@ -2,9 +2,10 @@ import Constants from "expo-constants";
 
 /**
  * Production API default — `EXPO_PUBLIC_API_URL` / `EXPO_PUBLIC_BACKEND_URL` override when set (Metro/.env).
- * (Supabase keys still use env / app.json extra when present.)
  */
 export const PRODUCTION_API_BASE = "https://ifcdc-barbers-backend696.onrender.com";
+
+const DEFAULT_DEV_API_PORT = "10000";
 
 function looksLikeLocalhostApi(url: string): boolean {
   const u = url.trim().toLowerCase();
@@ -18,6 +19,79 @@ function looksLikeLocalhostApi(url: string): boolean {
   );
 }
 
+function parseApiUrl(url: string): URL | null {
+  try {
+    return new URL(String(url || "").trim());
+  } catch {
+    return null;
+  }
+}
+
+function isLoopbackHost(hostname: string): boolean {
+  const h = hostname.trim().toLowerCase();
+  return h === "localhost" || h === "127.0.0.1" || h === "::1";
+}
+
+/** RFC1918-style IPv4 (192.168.x, 10.x, 172.16–31.x). */
+function isPrivateIpv4(hostname: string): boolean {
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(hostname.trim());
+  if (!m) return false;
+  const a = Number(m[1]);
+  const b = Number(m[2]);
+  if (a === 10) return true;
+  if (a === 192 && b === 168) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  return false;
+}
+
+/** Host from Expo dev server (`exp://192.168.x.x:8081`) — current machine LAN IP. */
+function hostFromExpoDevServer(): string | null {
+  const raw = String(
+    Constants.expoConfig?.hostUri
+      ?? (Constants as { manifest2?: { extra?: { expoClient?: { hostUri?: string } } } }).manifest2?.extra
+          ?.expoClient?.hostUri
+      ?? "",
+  ).trim();
+  if (!raw) return null;
+  const withoutScheme = raw.includes("://") ? raw.split("://").pop() || raw : raw;
+  const host = withoutScheme.split(":")[0]?.trim();
+  return host || null;
+}
+
+/**
+ * Dev API base: simulator → 127.0.0.1 (same Mac as Metro); physical device → match Expo LAN host when .env is stale.
+ */
+function resolveDevApiBase(envRaw: string): string {
+  const parsed = parseApiUrl(envRaw);
+  if (!parsed) return envRaw.replace(/\/$/, "");
+
+  const port = parsed.port || DEFAULT_DEV_API_PORT;
+  const protocol = parsed.protocol || "http:";
+
+  if (!Constants.isDevice) {
+    const loopback = `${protocol}//127.0.0.1:${port}`;
+    if (!isLoopbackHost(parsed.hostname)) {
+      console.warn(
+        `[IFCDC] Simulator: ${envRaw} → ${loopback} (LAN IPs in .env do not reach the Mac API from the simulator)`,
+      );
+    }
+    return loopback.replace(/\/$/, "");
+  }
+
+  if (isPrivateIpv4(parsed.hostname)) {
+    const metroHost = hostFromExpoDevServer();
+    if (metroHost && metroHost !== parsed.hostname && isPrivateIpv4(metroHost)) {
+      const updated = `${protocol}//${metroHost}:${port}`.replace(/\/$/, "");
+      console.warn(
+        `[IFCDC] Device: API host ${parsed.hostname} → ${metroHost} (synced with Expo dev server; update mobile/.env)`,
+      );
+      return updated;
+    }
+  }
+
+  return envRaw.replace(/\/$/, "");
+}
+
 const apiBaseEnv =
   typeof process !== "undefined"
     ? String(process.env.EXPO_PUBLIC_API_URL || process.env.EXPO_PUBLIC_BACKEND_URL || "").trim()
@@ -28,9 +102,7 @@ const useLocalApiExplicit =
 
 /**
  * API origin: env override when set, else production Render URL.
- * Production builds ignore localhost/ngrok env overrides.
- * In __DEV__, the iOS Simulator cannot reach the host's "localhost" — use production unless
- * `EXPO_PUBLIC_USE_LOCAL_API=1` is set (then the env URL is honored, including tunnels).
+ * In __DEV__ with a local URL, simulator uses 127.0.0.1; physical devices can follow Expo's LAN host.
  */
 export const BACKEND_URL = (() => {
   let base = (apiBaseEnv || PRODUCTION_API_BASE).replace(/\/$/, "");
@@ -43,18 +115,17 @@ export const BACKEND_URL = (() => {
     return PRODUCTION_API_BASE.replace(/\/$/, "");
   }
 
-  if (
-    __DEV__ &&
-    !Constants.isDevice &&
-    apiBaseEnv &&
-    looksLikeLocalhostApi(apiBaseEnv) &&
-    !useLocalApiExplicit
-  ) {
-    console.warn(
-      "[IFCDC] Simulator: localhost/tunnel API URL ignored — using production. Set EXPO_PUBLIC_USE_LOCAL_API=1 to force local API.",
-      PRODUCTION_API_BASE,
-    );
-    base = PRODUCTION_API_BASE.replace(/\/$/, "");
+  if (__DEV__) {
+    if (!apiBaseEnv) {
+      base = `http://127.0.0.1:${DEFAULT_DEV_API_PORT}`;
+      console.log("[IFCDC] Dev default API:", base);
+    } else if (
+      looksLikeLocalhostApi(apiBaseEnv)
+      || isPrivateIpv4(parseApiUrl(apiBaseEnv)?.hostname || "")
+      || useLocalApiExplicit
+    ) {
+      base = resolveDevApiBase(apiBaseEnv);
+    }
   }
 
   return base;
@@ -83,23 +154,10 @@ const supabaseKeyEnv =
 const supabaseUrlExtra = String(extra.supabaseUrl ?? "").trim();
 const supabaseKeyExtra = String(extra.supabaseAnonKey ?? "").trim();
 
-/** Supabase project URL (Dashboard → Settings → API). Same DB as DATABASE_URL on the backend. */
 export const SUPABASE_URL = supabaseUrlEnv || supabaseUrlExtra;
-/** Supabase anon (public) key — never ship the service role key in the app. */
 export const SUPABASE_ANON_KEY = supabaseKeyEnv || supabaseKeyExtra;
 
 export const isSupabaseConfigured = Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
-
-const shopPhoneEnv =
-  typeof process !== "undefined" && process.env.EXPO_PUBLIC_SHOP_PHONE_DIGITS
-    ? String(process.env.EXPO_PUBLIC_SHOP_PHONE_DIGITS).replace(/\D/g, "")
-    : "";
-const shopPhoneExtra = String(extra.shopPhoneDigits ?? "")
-  .replace(/\D/g, "")
-  .trim();
-
-/** US 10-digit shop line for tel:/sms: links; empty if unset. */
-export const SHOP_PHONE_DIGITS = shopPhoneEnv || shopPhoneExtra;
 
 const bucketEnv =
   typeof process !== "undefined" && process.env.EXPO_PUBLIC_SUPABASE_STORAGE_BUCKET
@@ -107,5 +165,4 @@ const bucketEnv =
     : "";
 const bucketExtra = String(extra.supabaseStorageBucket ?? "").trim();
 
-/** Must match server SUPABASE_STORAGE_BUCKET (default barber-styles). */
 export const SUPABASE_STORAGE_BUCKET = bucketEnv || bucketExtra || "barber-styles";

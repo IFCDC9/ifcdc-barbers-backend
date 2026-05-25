@@ -14,6 +14,7 @@ import { comparePassword, hashPassword, validatePasswordStrength } from "./authP
 import { jwtClaimsFromAppUser, publicUserFromAppUser } from "./authPlatformJwt.js";
 import { writeSecurityAudit } from "./auditSecurity.js";
 import { CANONICAL_SUPER_ADMIN_EMAIL, isSuperAdminEmail, resolveRoleFromTrustedSource } from "./rolePolicy.js";
+import { recordSignupAcceptanceBatch } from "./legalRoutes.js";
 
 const require = createRequire(import.meta.url);
 const jwt = require("jsonwebtoken");
@@ -192,6 +193,41 @@ export function createAuthRouter({ sendEmail }) {
         redirect: postLoginRedirectFromClaims(claims),
       });
 
+      // Best-effort: persist signup-time legal acceptances if the client sent them.
+      // Never fails registration — auth flow is the protected path.
+      try {
+        const list = Array.isArray(req.body?.acceptances) ? req.body.acceptances : [];
+        if (user?.id && list.length > 0) {
+          const ip =
+            (req.headers["x-forwarded-for"] || "")
+              .toString()
+              .split(",")[0]
+              .trim() ||
+            req.ip ||
+            null;
+          const userAgent =
+            typeof req.headers["user-agent"] === "string"
+              ? req.headers["user-agent"].slice(0, 320)
+              : null;
+          await recordSignupAcceptanceBatch({
+            userId: String(user.id),
+            acceptances: list,
+            appVersion:
+              typeof req.body?.appVersion === "string" && req.body.appVersion.trim()
+                ? req.body.appVersion.trim().slice(0, 64)
+                : null,
+            platform:
+              typeof req.body?.platform === "string" && req.body.platform.trim()
+                ? req.body.platform.trim().slice(0, 32)
+                : null,
+            ip,
+            userAgent,
+          });
+        }
+      } catch (acceptErr) {
+        console.warn("[auth] register acceptance log failed:", acceptErr?.message || acceptErr);
+      }
+
       return res.json({
         ok: true,
         success: true,
@@ -281,7 +317,7 @@ export function createAuthRouter({ sendEmail }) {
         });
       }
       const found = await dbQuery(
-        `SELECT id, name, email, role, barber_id, business_id, created_at
+        `SELECT id, name, email, phone, profile_image_url, role, barber_id, business_id, created_at
          FROM app_users WHERE id = $1::uuid LIMIT 1`,
         [id],
       );
@@ -311,6 +347,87 @@ export function createAuthRouter({ sendEmail }) {
         error: "server_error",
         message: "Session lookup failed",
       });
+    }
+  });
+
+  router.patch("/profile", requireAuth, async (req, res) => {
+    try {
+      const id = String(req.user?.id || "").trim();
+      if (!id) {
+        return res.status(401).json({ ok: false, error: "unauthorized", message: "Invalid session" });
+      }
+      const body = req.body || {};
+      const name = body.name != null ? String(body.name).trim().slice(0, 255) : null;
+      const phoneRaw = body.phone != null ? String(body.phone).replace(/\D/g, "").slice(0, 15) : null;
+      const profileImageUrl =
+        body.profileImageUrl != null ? String(body.profileImageUrl).trim().slice(0, 2048) : null;
+
+      if (name !== null && !name) {
+        return res.status(400).json({ ok: false, error: "name_required", message: "Name cannot be empty" });
+      }
+
+      const sets = [];
+      const params = [];
+      let i = 1;
+      if (name !== null) {
+        sets.push(`name = $${i++}`);
+        params.push(name);
+      }
+      if (body.phone !== undefined) {
+        sets.push(`phone = $${i++}`);
+        params.push(phoneRaw || null);
+      }
+      if (body.profileImageUrl !== undefined) {
+        sets.push(`profile_image_url = $${i++}`);
+        params.push(profileImageUrl || null);
+      }
+      if (!sets.length) {
+        return res.status(400).json({ ok: false, error: "no_fields", message: "No profile fields to update" });
+      }
+      params.push(id);
+      const updated = await dbQuery(
+        `UPDATE app_users SET ${sets.join(", ")} WHERE id = $${i}::uuid
+         RETURNING id, name, email, phone, profile_image_url, role, barber_id, business_id, created_at`,
+        params,
+      );
+      const user = updated.rows?.[0];
+      if (!user) {
+        return res.status(404).json({ ok: false, error: "user_not_found", message: "Account not found" });
+      }
+      return res.json({
+        ok: true,
+        success: true,
+        user: publicUserFromAppUser(user),
+      });
+    } catch (e) {
+      console.error("[auth] PATCH /profile error:", e);
+      return res.status(500).json({ ok: false, error: "server_error", message: "Profile update failed" });
+    }
+  });
+
+  router.get("/my-bookings", requireAuth, async (req, res) => {
+    try {
+      const id = String(req.user?.id || "").trim();
+      const email = String(req.user?.email || "").trim();
+      if (!id) {
+        return res.status(401).json({ ok: false, error: "unauthorized", message: "Invalid session" });
+      }
+      const r = await dbQuery(
+        `SELECT id, customer_name, customer_email, barber_name, service,
+                date::text AS date, to_char(time, 'HH12:MI AM') AS time,
+                payment_status, booking_status, total_amount, platform_fee,
+                paypal_order_id, created_at
+         FROM bookings
+         WHERE user_id = $1::uuid
+            OR (customer_email IS NOT NULL AND lower(trim(customer_email)) = lower(trim($2)))
+         ORDER BY created_at DESC
+         LIMIT 100`,
+        [id, email || ""],
+      );
+      return res.json({ ok: true, bookings: r.rows || [] });
+    } catch (e) {
+      console.error("[auth] GET /my-bookings error:", e);
+      return res.status(500).json({ ok: false, error: "server_error", message: "Could not load bookings" });
     }
   });
 

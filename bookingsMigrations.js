@@ -28,12 +28,23 @@ export async function ensureBookingsTable() {
   await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS remaining_balance NUMERIC(10,2);`);
   await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS payment_type TEXT;`);
   await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS barber_name TEXT;`);
+  await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS service_duration_minutes INT;`);
   await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS style_id UUID;`);
   await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS style_title TEXT;`);
   await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS style_image_url TEXT;`);
   await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS tip_amount NUMERIC(10,2);`);
   await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS total_paid NUMERIC(10,2);`);
   await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS phone TEXT;`);
+  await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS notes TEXT;`);
+  await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ;`);
+  await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS cancelled_by TEXT;`);
+  await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS cancellation_reason TEXT;`);
+  await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS rescheduled_from_date DATE;`);
+  await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS rescheduled_from_time TIME;`);
+  await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS rescheduled_to_date DATE;`);
+  await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS rescheduled_to_time TIME;`);
+  await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS rescheduled_by TEXT;`);
+  await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS rescheduled_at TIMESTAMPTZ;`);
   await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS platform_fee NUMERIC(10,2) NOT NULL DEFAULT 0;`);
   await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS total_amount NUMERIC(10,2);`);
   // These must run even if client_id FK is deferred (FK add is at end of this file).

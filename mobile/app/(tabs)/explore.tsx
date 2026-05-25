@@ -1,122 +1,109 @@
 import React from "react"
-import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-} from "react-native"
+import { ScrollView, StyleSheet, Text, useWindowDimensions, View } from "react-native"
 import { useNavigation } from "@react-navigation/native"
-import ContactShopCard from "../../components/ContactShopCard"
+import { useSafeAreaInsets } from "react-native-safe-area-context"
 import CardContainer from "../../components/CardContainer"
+import DarkGradientBackground from "../../components/DarkGradientBackground"
 import GlowButton from "../../components/GlowButton"
-import LiveSupabaseDashboard from "../../components/LiveSupabaseDashboard"
 import { theme } from "../../constants/theme"
-import { startListeningOnce, voiceTurnFromTextAsync } from "../../services/voiceService"
-import { Alert } from "react-native"
+
+const HORIZONTAL_PAD = 24
 
 const ExploreScreen = () => {
   const navigation = useNavigation<{ navigate: (name: "Book") => void }>()
+  const insets = useSafeAreaInsets()
+  const { width: screenWidth } = useWindowDimensions()
+
+  const brandFontSize = screenWidth < 340 ? 11 : screenWidth < 375 ? 12 : 13
+  const brandLetterSpacing = screenWidth < 340 ? 0.6 : screenWidth < 375 ? 1 : 1.4
+
   return (
-    <ScrollView
-      style={styles.scroll}
-      contentContainerStyle={styles.content}
-      showsVerticalScrollIndicator={false}
-    >
-      <Text style={styles.brand}>IFCDC BARBER</Text>
-      <Text style={styles.tagline}>Cut. Style. Elevate.</Text>
+    <View style={styles.root}>
+      <DarkGradientBackground />
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={[
+          styles.content,
+          { paddingTop: insets.top + 20, paddingBottom: Math.max(insets.bottom, 16) + 48 },
+        ]}
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.headerBlock}>
+          <Text
+            style={[
+              styles.brand,
+              { fontSize: brandFontSize, letterSpacing: brandLetterSpacing },
+            ]}
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.82}
+          >
+            IFCDC BARBERS
+          </Text>
+          <Text style={styles.tagline}>Cut. Style. Elevate.</Text>
+        </View>
 
-      <CardContainer glow style={styles.heroCard}>
-        <Text style={styles.heroTitle}>Book Appointment</Text>
-        <Text style={styles.heroCopy}>
-          Reserve your chair, choose your service, and check out securely.
-        </Text>
-        <GlowButton label="Book Appointment →" onPress={() => navigation.navigate("Book")} />
-      </CardContainer>
-
-      <CardContainer glow style={styles.voiceCard}>
-        <Text style={styles.voiceTitle}>Voice Assistant (beta)</Text>
-        <Text style={styles.voiceCopy}>
-          Tap to speak. On Expo Go, speech recognition may require a dev build.
-        </Text>
-        <GlowButton
-          label="Start voice"
-          onPress={async () => {
-            try {
-              const transcript = await startListeningOnce()
-              const result = await voiceTurnFromTextAsync(transcript)
-              if (!result.ok) {
-                Alert.alert("Voice", result.error)
-                return
-              }
-              Alert.alert("Voice", result.replyText)
-            } catch (e) {
-              Alert.alert("Voice", e instanceof Error ? e.message : String(e))
-            }
-          }}
-        />
-      </CardContainer>
-
-      <LiveSupabaseDashboard />
-
-      <ContactShopCard />
-    </ScrollView>
+        <CardContainer style={styles.heroCard}>
+          <Text style={styles.heroTitle}>Book Appointment</Text>
+          <Text style={styles.heroCopy}>
+            Choose your barber, pick a time, and pay securely with PayPal. You will receive a
+            confirmation email when your booking is complete.
+          </Text>
+          <GlowButton label="Book Appointment →" onPress={() => navigation.navigate("Book")} />
+        </CardContainer>
+      </ScrollView>
+    </View>
   )
 }
 
 const styles = StyleSheet.create({
-  scroll: {
+  root: {
     flex: 1,
     backgroundColor: theme.colors.bg0,
   },
+  scroll: {
+    flex: 1,
+  },
   content: {
-    padding: 24,
-    paddingBottom: 40,
-    gap: 24,
+    flexGrow: 1,
+    paddingHorizontal: HORIZONTAL_PAD,
+    gap: 20,
+  },
+  headerBlock: {
+    width: "100%",
+    maxWidth: "100%",
+    flexShrink: 1,
+    gap: 6,
   },
   brand: {
     color: theme.colors.gold,
-    fontSize: 13,
     fontWeight: "800",
-    letterSpacing: 4,
-    marginTop: 8,
-    alignSelf: "flex-start",
-    paddingRight: 8,
+    flexShrink: 1,
+    width: "100%",
+    maxWidth: "100%",
   },
   tagline: {
     color: theme.colors.textMuted,
     fontSize: 15,
     fontWeight: "500",
-    marginBottom: 8,
+    flexShrink: 1,
   },
   heroCard: {
-    padding: 22,
-  },
-  voiceCard: {
-    padding: 22,
+    padding: 28,
+    marginTop: 12,
   },
   heroTitle: {
     color: theme.colors.text,
-    fontSize: 22,
-    fontWeight: "700",
-    marginBottom: 10,
+    fontSize: 26,
+    fontWeight: "800",
+    marginBottom: 12,
+    letterSpacing: 0.3,
   },
   heroCopy: {
     color: theme.colors.textMuted,
-    fontSize: 15,
-    lineHeight: 22,
-    marginBottom: 18,
-  },
-  voiceTitle: {
-    color: theme.colors.text,
-    fontSize: 18,
-    fontWeight: "700",
-    marginBottom: 8,
-  },
-  voiceCopy: {
-    color: theme.colors.textMuted,
-    fontSize: 14,
-    lineHeight: 20,
-    marginBottom: 14,
+    fontSize: 16,
+    lineHeight: 24,
+    marginBottom: 22,
   },
 })
 

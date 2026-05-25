@@ -1,0 +1,134 @@
+diff --git a/node_modules/eas-cli/build/submit/utils/logs.js b/node_modules/eas-cli/build/submit/utils/logs.js
+index af06007..634dfda 100644
+--- a/node_modules/eas-cli/build/submit/utils/logs.js
++++ b/node_modules/eas-cli/build/submit/utils/logs.js
+@@ -12,32 +12,66 @@ async function displayLogsAsync(submission, { verbose = false, moreSubmissions =
+     if (submission.status === generated_1.SubmissionStatus.Errored && submission.error) {
+         printedUnknownError = (0, errors_1.printSubmissionError)(submission.error);
+     }
++    else if (submission.status === generated_1.SubmissionStatus.Errored && !submission.error) {
++        log_1.default.addNewLineIfNone();
++        log_1.default.error(`Submission ${submission.id} failed (Expo returned no error details). Trying to fetch logs…`);
++    }
+     else if (submission.status === generated_1.SubmissionStatus.Canceled && moreSubmissions) {
+         log_1.default.newLine();
+         log_1.default.error('Submission has been canceled');
+     }
+-    if (printedUnknownError || verbose) {
++    if (submission.status === generated_1.SubmissionStatus.Errored || printedUnknownError || verbose) {
+         await downloadAndPrintSubmissionLogsAsync(submission);
+     }
+ }
+ async function downloadAndPrintSubmissionLogsAsync(submission) {
+-    for (const logFile of submission.logFiles) {
+-        const response = await (0, fetch_1.default)(logFile);
+-        const logs = parseLogs(await response.text());
++    const logFiles = submission.logFiles ?? [];
++    if (logFiles.length === 0) {
+         log_1.default.addNewLineIfNone();
+-        const prefix = chalk_1.default.blueBright('[logs] ');
+-        for (const { level, msg } of logs) {
+-            const msgWithPrefix = `${prefix}${msg}`;
+-            if (level === 'error') {
+-                log_1.default.error(msgWithPrefix);
++        log_1.default.warn('[logs] Expo did not attach log file URLs (known Expo quirk for some failed jobs).');
++        const owner = submission.app?.ownerAccount?.name;
++        const slug = submission.app?.slug;
++        if (owner && slug) {
++            log_1.default.warn(`[logs] Full job output (browser): https://expo.dev/accounts/${encodeURIComponent(owner)}/projects/${encodeURIComponent(slug)}/submissions/${submission.id}`);
++        }
++        else {
++            log_1.default.warn('[logs] Open the "Submission details" link printed earlier while logged into expo.dev.');
++        }
++        log_1.default.warn('[logs] Workaround — re-upload the same store IPA without relying on Expo logs:');
++        log_1.default.warn('     cd mobile && npm run eas:ipa:url');
++        log_1.default.warn('     Run the printed command that contains: eas-cli submit ... --url');
++        return;
++    }
++    for (const logFile of logFiles) {
++        try {
++            const response = await (0, fetch_1.default)(logFile);
++            if (!response.ok) {
++                log_1.default.error(`[logs] Failed to download log (${response.status} ${response.statusText}): ${logFile}`);
++                continue;
+             }
+-            else if (level === 'warn') {
+-                log_1.default.warn(msgWithPrefix);
++            const logs = parseLogs(await response.text());
++            log_1.default.addNewLineIfNone();
++            const prefix = chalk_1.default.blueBright('[logs] ');
++            if (logs.length === 0) {
++                log_1.default.warn('[logs] Log file downloaded but contained no parseable JSON lines. Check the submission page on expo.dev.');
++                continue;
+             }
+-            else {
+-                log_1.default.log(msgWithPrefix);
++            for (const { level, msg } of logs) {
++                const msgWithPrefix = `${prefix}${msg}`;
++                if (level === 'error') {
++                    log_1.default.error(msgWithPrefix);
++                }
++                else if (level === 'warn') {
++                    log_1.default.warn(msgWithPrefix);
++                }
++                else {
++                    log_1.default.log(msgWithPrefix);
++                }
+             }
+         }
++        catch (err) {
++            log_1.default.error(`[logs] ${err?.message || err}`);
++        }
+     }
+ }
+ function parseLogs(logs) {
+diff --git a/node_modules/eas-cli/build/submit/utils/wait.js b/node_modules/eas-cli/build/submit/utils/wait.js
+index 48bd4e9..9c2f867 100644
+--- a/node_modules/eas-cli/build/submit/utils/wait.js
++++ b/node_modules/eas-cli/build/submit/utils/wait.js
+@@ -13,6 +13,31 @@ const APP_STORE_NAMES = {
+     [generated_1.AppPlatform.Ios]: 'Apple App Store Connect',
+ };
+ const CHECK_INTERVAL_MS = 5_000;
++/** Poll Expo until logFiles appear (often populated shortly after status=Errored). */
++const LOG_ATTACH_POLL_MS = 5000;
++const LOG_ATTACH_MAX_ATTEMPTS = 36;
++async function hydrateErroredSubmissionLogFilesAsync(graphqlClient, submission) {
++    if (submission.status !== generated_1.SubmissionStatus.Errored) {
++        return submission;
++    }
++    if (submission.logFiles?.length) {
++        return submission;
++    }
++    for (let attempt = 0; attempt < LOG_ATTACH_MAX_ATTEMPTS; attempt++) {
++        await (0, promise_1.sleepAsync)(LOG_ATTACH_POLL_MS);
++        try {
++            const next = await SubmissionQuery_1.SubmissionQuery.byIdAsync(graphqlClient, submission.id, {
++                useCache: false,
++            });
++            if (next?.logFiles?.length) {
++                return next;
++            }
++        }
++        catch {
++        }
++    }
++    return submission;
++}
+ async function waitForSubmissionsEndAsync(graphqlClient, initialSubmissions) {
+     log_1.default.log(`Waiting for submission${initialSubmissions.length > 1 ? 's' : ''} to complete. You can press Ctrl+C to exit.`);
+     const spinner = (0, ora_1.ora)(`Submitting`).start();
+@@ -35,8 +60,11 @@ async function waitForSubmissionsEndAsync(graphqlClient, initialSubmissions) {
+                     return [submission];
+                 }
+                 else if (submission.status === generated_1.SubmissionStatus.Errored) {
+-                    spinner.fail();
+-                    return [submission];
++                    const appStoreName = APP_STORE_NAMES[submission.platform];
++                    spinner.text = `${appStoreName}: fetching diagnostic logs (up to ~${Math.round(LOG_ATTACH_POLL_MS * LOG_ATTACH_MAX_ATTEMPTS / 60000)} min)…`;
++                    const hydrated = await hydrateErroredSubmissionLogFilesAsync(graphqlClient, submission);
++                    spinner.fail(getSingleSpinnerText(hydrated));
++                    return [hydrated];
+                 }
+                 else if (submission.status === generated_1.SubmissionStatus.Canceled) {
+                     spinner.warn();

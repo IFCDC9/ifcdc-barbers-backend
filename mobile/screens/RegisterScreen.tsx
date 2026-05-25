@@ -1,5 +1,15 @@
 import React from "react";
-import { Alert, Button, StyleSheet, Text, TextInput, View } from "react-native";
+import {
+  Alert,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
+import Constants from "expo-constants";
 import * as Google from "expo-auth-session/providers/google";
 import CardContainer from "../components/CardContainer";
 import GlowButton from "../components/GlowButton";
@@ -11,6 +21,18 @@ import { EXPO_GO_GOOGLE_PROMPT_OPTIONS } from "../auth/expoGooglePromptOptions";
 import { getGoogleIdTokenAuthConfig } from "../auth/googleAuthRequestConfig";
 import { exchangeGoogleIdToken } from "../auth/googleBackendLogin";
 import { registerWithEmailPassword } from "../auth/authSessionApi";
+import { UX } from "../utils/uxCopy";
+import { userFacingApiError } from "../utils/userFacingApiError";
+import { POLICY_VERSION } from "../constants/legalContent";
+import { buildSignupAcceptances, recordAcceptance } from "../services/legalApi";
+
+function appVersionString(): string {
+  return (
+    (Constants.expoConfig as { version?: string } | undefined)?.version ||
+    (Constants.manifest as unknown as { version?: string } | undefined)?.version ||
+    ""
+  );
+}
 
 const GOOGLE_REDIRECT_OPTIONS = {
   useProxy: true,
@@ -26,6 +48,9 @@ export default function RegisterScreen({ navigation }: { navigation: any }) {
   const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
   const [accountType, setAccountType] = React.useState<"customer" | "barber" | "shop_owner">("customer");
+  const [acceptedTerms, setAcceptedTerms] = React.useState(false);
+  const [acceptedPrivacy, setAcceptedPrivacy] = React.useState(false);
+  const [acceptedNotifications, setAcceptedNotifications] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
   const submittingRef = React.useRef(false);
 
@@ -54,8 +79,7 @@ export default function RegisterScreen({ navigation }: { navigation: any }) {
       console.log("[auth] Google response:", response.type, { hasIdToken: Boolean(p.id_token) });
 
       if (response.type === "error") {
-        const err = (response as any).error;
-        Alert.alert("Google sign-in", err ? String(err) : "Unknown OAuth error");
+        Alert.alert("Google sign-in", "Google sign-in could not be completed. Please try again.");
         return undefined;
       }
 
@@ -70,9 +94,14 @@ export default function RegisterScreen({ navigation }: { navigation: any }) {
         || ((response as any)?.authentication?.idToken as string | undefined);
 
       if (!idToken) {
+        Alert.alert("Google sign-in", "Google sign-in could not be completed. Please try again.");
+        return undefined;
+      }
+
+      if (!acceptedTerms || !acceptedPrivacy) {
         Alert.alert(
-          "Google sign-in",
-          "No ID token returned. Ensure the Web OAuth client uses OpenID and you are signed in with useIdTokenAuthRequest (implicit id_token flow)."
+          "Required acceptance",
+          "Please review and accept the Terms & Conditions and the Privacy Policy before continuing with Google.",
         );
         return undefined;
       }
@@ -94,28 +123,37 @@ export default function RegisterScreen({ navigation }: { navigation: any }) {
                 redirect: responseData.redirect,
               });
               await signInWithToken(responseData.token);
+              try {
+                const acceptances = buildSignupAcceptances({
+                  acceptedTerms,
+                  acceptedPrivacy,
+                  acceptedNotifications,
+                });
+                void recordAcceptance(acceptances);
+              } catch (legalErr) {
+                if (__DEV__) {
+                  console.log(
+                    "[register] post-google legal record failed:",
+                    legalErr instanceof Error ? legalErr.message : String(legalErr),
+                  );
+                }
+              }
             } catch (saveErr) {
-              Alert.alert(
-                "Could not save session",
-                saveErr instanceof Error ? saveErr.message : "Token save failed.",
-              );
+              Alert.alert("Session", userFacingApiError(saveErr));
             }
             return;
           }
 
           if (responseData.user) {
-            Alert.alert(
-              "Google sign-in",
-              "Google verified your account, but the server did not return a JWT. Ensure POST /api/auth/google responds with a `token` field so the app can stay signed in."
-            );
+            Alert.alert("Google sign-in", "Sign-in could not be completed. Please try again or use email.");
             return;
           }
 
-          Alert.alert("Google sign-in", "Unexpected server response after Google sign-in.");
+          Alert.alert("Google sign-in", "Sign-in could not be completed. Please try again.");
         } catch (e) {
           if ((e as Error)?.name === "AbortError") return;
           console.log("[register] Google exchange failed:", e instanceof Error ? e.message : String(e));
-          Alert.alert("Google sign-in", e instanceof Error ? e.message : String(e));
+          Alert.alert("Google sign-in", userFacingApiError(e));
         } finally {
           if (!ac.signal.aborted) setBusy(false);
         }
@@ -125,11 +163,11 @@ export default function RegisterScreen({ navigation }: { navigation: any }) {
       console.log("[register] Google response handler error:", e instanceof Error ? e.message : String(e));
       return undefined;
     }
-  }, [response, signInWithToken]);
+  }, [response, signInWithToken, acceptedTerms, acceptedPrivacy, acceptedNotifications]);
 
   const startGoogle = async () => {
     if (!googleConfigured) {
-      Alert.alert("Google sign-in", "Google OAuth config missing on this build.");
+      Alert.alert("Google sign-in", UX.googleSignInUnavailable);
       return;
     }
     if (!request) {
@@ -141,20 +179,37 @@ export default function RegisterScreen({ navigation }: { navigation: any }) {
       console.log("[auth] promptAsync done:", result.type);
     } catch (e) {
       console.log("[auth] promptAsync error:", e instanceof Error ? e.message : String(e));
-      Alert.alert("Google sign-in", e instanceof Error ? e.message : String(e));
+      Alert.alert("Google sign-in", userFacingApiError(e));
     }
   };
 
   const register = async () => {
     if (submittingRef.current) return;
+    if (!acceptedTerms || !acceptedPrivacy) {
+      Alert.alert(
+        "Required acceptance",
+        "Please review and accept the Terms & Conditions and the Privacy Policy to continue.",
+      );
+      return;
+    }
     submittingRef.current = true;
     try {
       setBusy(true);
+      const acceptances = buildSignupAcceptances({
+        acceptedTerms,
+        acceptedPrivacy,
+        acceptedNotifications,
+      });
       const { token, json } = await registerWithEmailPassword(
         fullName.trim(),
         email.trim(),
         password,
         accountType,
+        {
+          acceptances,
+          appVersion: appVersionString(),
+          platform: Platform.OS,
+        },
       );
       const u = json?.user;
       console.log("[auth] client_register", {
@@ -165,13 +220,10 @@ export default function RegisterScreen({ navigation }: { navigation: any }) {
       try {
         await signInWithToken(token);
       } catch (saveErr) {
-        Alert.alert(
-          "Could not save session",
-          saveErr instanceof Error ? saveErr.message : "Token save failed.",
-        );
+        Alert.alert("Session", userFacingApiError(saveErr));
       }
     } catch (e) {
-      Alert.alert("Create account", e instanceof Error ? e.message : String(e));
+      Alert.alert("Create account", userFacingApiError(e));
     } finally {
       submittingRef.current = false;
       setBusy(false);
@@ -179,16 +231,22 @@ export default function RegisterScreen({ navigation }: { navigation: any }) {
   };
 
   return (
-    <View style={styles.container}>
+    <ScrollView
+      style={styles.scroll}
+      contentContainerStyle={styles.container}
+      keyboardShouldPersistTaps="handled"
+      showsVerticalScrollIndicator={false}
+    >
+      <View pointerEvents="none" style={styles.glowOrb} />
       <Text style={styles.brand}>IFCDC BARBER</Text>
+      <View style={styles.brandUnderline} />
       <Text style={styles.title}>Create account</Text>
+      <Text style={styles.tagline}>Join the IFCDC community.</Text>
 
       <CardContainer glow style={{ width: "100%" }}>
         {googleConfigured && request ? (
           <>
             <GoogleButton onPress={startGoogle} disabled={!request || busy} />
-            <View style={{ height: 8 }} />
-            <Button title="Continue with Google" onPress={startGoogle} disabled={!request || busy} />
             <View style={{ height: 12 }} />
             <Text style={styles.or}>or</Text>
             <View style={{ height: 12 }} />
@@ -200,9 +258,7 @@ export default function RegisterScreen({ navigation }: { navigation: any }) {
           </>
         ) : (
           <>
-            <Text style={styles.helper}>
-              Google OAuth config missing: set EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID and backend GOOGLE_CLIENT_ID.
-            </Text>
+            <Text style={styles.helper}>{UX.googleSignInUnavailable}</Text>
             <View style={{ height: 12 }} />
           </>
         )}
@@ -265,38 +321,207 @@ export default function RegisterScreen({ navigation }: { navigation: any }) {
           style={styles.input}
           editable={!busy}
         />
+        <View style={{ height: 16 }} />
+        <View style={styles.legalBlock}>
+          <ConsentRow
+            checked={acceptedTerms}
+            onToggle={() => setAcceptedTerms(v => !v)}
+            disabled={busy}
+            required
+          >
+            I agree to the{" "}
+            <Text
+              style={styles.legalLink}
+              onPress={() => navigation.navigate("TermsConditions")}
+            >
+              Terms & Conditions
+            </Text>
+            .
+          </ConsentRow>
+          <View style={{ height: 8 }} />
+          <ConsentRow
+            checked={acceptedPrivacy}
+            onToggle={() => setAcceptedPrivacy(v => !v)}
+            disabled={busy}
+            required
+          >
+            I acknowledge the{" "}
+            <Text
+              style={styles.legalLink}
+              onPress={() => navigation.navigate("PrivacyPolicy")}
+            >
+              Privacy Policy
+            </Text>
+            .
+          </ConsentRow>
+          <View style={{ height: 8 }} />
+          <ConsentRow
+            checked={acceptedNotifications}
+            onToggle={() => setAcceptedNotifications(v => !v)}
+            disabled={busy}
+          >
+            Send me booking reminders and important updates by push and email.
+            (Optional — see{" "}
+            <Text
+              style={styles.legalLink}
+              onPress={() => navigation.navigate("NotificationConsent")}
+            >
+              Notification Consent
+            </Text>
+            .)
+          </ConsentRow>
+          <Text style={styles.policyVersion}>Policy version {POLICY_VERSION}</Text>
+        </View>
         <View style={{ height: 12 }} />
         <GlowButton label="Create account" onPress={register} disabled={busy} loading={busy} />
 
         <View style={{ height: 12 }} />
         <GlowButton label="Back to sign in" onPress={() => navigation.navigate("Login")} variant="outline" disabled={busy} />
       </CardContainer>
-    </View>
+    </ScrollView>
+  );
+}
+
+function ConsentRow({
+  checked,
+  onToggle,
+  disabled = false,
+  required = false,
+  children,
+}: {
+  checked: boolean;
+  onToggle: () => void;
+  disabled?: boolean;
+  required?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <Pressable
+      onPress={onToggle}
+      disabled={disabled}
+      hitSlop={6}
+      style={({ pressed }) => [
+        styles.consentRow,
+        pressed && !disabled && styles.consentRowPressed,
+      ]}
+      accessibilityRole="checkbox"
+      accessibilityState={{ checked, disabled }}
+    >
+      <View
+        style={[
+          styles.checkbox,
+          checked && styles.checkboxChecked,
+          disabled && styles.checkboxDisabled,
+        ]}
+      >
+        {checked ? <Text style={styles.checkboxMark}>✓</Text> : null}
+      </View>
+      <View style={styles.consentTextWrap}>
+        <Text style={styles.consentText}>{children}</Text>
+        {required ? <Text style={styles.consentRequired}>Required</Text> : null}
+      </View>
+    </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
+  scroll: { flex: 1, backgroundColor: theme.colors.bg0 },
   container: {
-    flex: 1,
+    flexGrow: 1,
     backgroundColor: theme.colors.bg0,
     padding: 20,
     justifyContent: "center",
     alignItems: "center",
-    gap: 10,
+    gap: 6,
+    paddingVertical: 36,
   },
-  brand: { color: theme.colors.gold, fontWeight: "900", fontSize: 18, letterSpacing: 1.6 },
-  title: { color: theme.colors.text, fontWeight: "900", fontSize: 26, marginBottom: 8 },
+  glowOrb: {
+    position: "absolute",
+    top: 0,
+    left: "50%",
+    marginLeft: -160,
+    width: 320,
+    height: 320,
+    borderRadius: 160,
+    backgroundColor: "rgba(245,200,66,0.06)",
+  },
+  brand: { color: theme.colors.gold, fontWeight: "900", fontSize: 18, letterSpacing: 1.8 },
+  brandUnderline: {
+    width: 28,
+    height: 2,
+    borderRadius: 2,
+    backgroundColor: theme.colors.goldSoft,
+    marginTop: 4,
+    marginBottom: 6,
+  },
+  title: { color: theme.colors.text, fontWeight: "900", fontSize: 28, marginTop: 4 },
+  tagline: {
+    color: theme.colors.textMuted,
+    fontSize: 12.5,
+    marginBottom: 14,
+    letterSpacing: 0.4,
+  },
   helper: { color: theme.colors.textMuted, textAlign: "center", fontSize: 12 },
   or: { color: theme.colors.textMuted, textAlign: "center", fontWeight: "700" },
   roleRow: { flexDirection: "row", width: "100%", justifyContent: "center", alignItems: "stretch" },
   input: {
-    backgroundColor: "rgba(255,255,255,0.04)",
+    backgroundColor: "rgba(255,255,255,0.05)",
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.10)",
     borderRadius: theme.radius.md,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
     color: theme.colors.text,
+    fontSize: 14.5,
+  },
+  legalBlock: {
+    backgroundColor: "rgba(255,255,255,0.03)",
+    borderRadius: theme.radius.md,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.08)",
+  },
+  legalLink: { color: theme.colors.gold, fontWeight: "700", textDecorationLine: "underline" },
+  policyVersion: {
+    color: theme.colors.textMuted,
+    fontSize: 11,
+    fontWeight: "600",
+    textAlign: "center",
+    marginTop: 10,
+    letterSpacing: 0.4,
+  },
+  consentRow: { flexDirection: "row", alignItems: "flex-start", gap: 10 },
+  consentRowPressed: { opacity: 0.7 },
+  consentTextWrap: { flex: 1 },
+  consentText: { color: theme.colors.text, fontSize: 13, lineHeight: 19 },
+  consentRequired: {
+    color: theme.colors.gold,
+    fontSize: 10,
+    fontWeight: "800",
+    letterSpacing: 0.8,
+    marginTop: 3,
+    textTransform: "uppercase",
+  },
+  checkbox: {
+    width: 22,
+    height: 22,
+    borderRadius: 5,
+    borderWidth: 1.5,
+    borderColor: "rgba(245,200,66,0.55)",
+    backgroundColor: "rgba(255,255,255,0.04)",
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 1,
+  },
+  checkboxChecked: {
+    backgroundColor: "rgba(245,200,66,0.2)",
+    borderColor: theme.colors.gold,
+  },
+  checkboxDisabled: { opacity: 0.5 },
+  checkboxMark: {
+    color: theme.colors.gold,
     fontSize: 14,
+    lineHeight: 14,
+    fontWeight: "900",
   },
 });
