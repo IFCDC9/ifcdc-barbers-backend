@@ -176,6 +176,12 @@ export type RegisterExtras = {
   acceptances?: SignupAcceptanceItem[];
   appVersion?: string;
   platform?: string;
+  /**
+   * Forward-compatible profile hint (Phase 3 / Final pass). The current backend
+   * ignores unknown fields, so this is safe to send today; when the backend
+   * persists a per-user language, no client change will be required.
+   */
+  language?: string;
 };
 
 export async function registerWithEmailPassword(
@@ -191,6 +197,7 @@ export async function registerWithEmailPassword(
   }
   if (extras.appVersion) body.appVersion = extras.appVersion;
   if (extras.platform) body.platform = extras.platform;
+  if (extras.language) body.language = extras.language;
   const { json, status } = await postAuthJson("/api/auth/register", body);
   if (loginResponseSucceeded(status, json)) {
     return { token: String(json.token).trim(), json };

@@ -62,7 +62,9 @@
     "consentNotifications": "Envíame recordatorios de citas y avisos importantes por notificación y correo. (Opcional)",
     "consentRequiredTitle": "Aceptación requerida",
     "consentRequiredBody": "Revisa y acepta los Términos y Condiciones y la Política de Privacidad para continuar.",
-    "policyVersion": "Versión de política {{version}}"
+    "policyVersion": "Versión de política {{version}}",
+    "chooseLanguage": "Elige tu idioma",
+    "chooseLanguageHint": "Puedes cambiarlo después en tu perfil."
   },
   "tabs": {
     "home": "Inicio",

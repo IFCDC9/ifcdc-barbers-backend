@@ -26,6 +26,12 @@ import { UX } from "../utils/uxCopy";
 import { userFacingApiError } from "../utils/userFacingApiError";
 import { POLICY_VERSION } from "../constants/legalContent";
 import { buildSignupAcceptances, recordAcceptance } from "../services/legalApi";
+import {
+  SUPPORTED_LANGUAGES,
+  currentLanguage,
+  setLanguage,
+  type SupportedLanguageCode,
+} from "../i18n";
 
 function appVersionString(): string {
   return (
@@ -41,7 +47,7 @@ const GOOGLE_REDIRECT_OPTIONS = {
 } as const;
 
 export default function RegisterScreen({ navigation }: { navigation: any }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   React.useEffect(() => {
     console.log("[register] API base:", BACKEND_URL, "register URL:", apiFullUrl("/api/auth/register"));
   }, []);
@@ -55,6 +61,29 @@ export default function RegisterScreen({ navigation }: { navigation: any }) {
   const [acceptedNotifications, setAcceptedNotifications] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
   const submittingRef = React.useRef(false);
+
+  // Pre-signup language selector. Persisted to AsyncStorage immediately on tap so
+  // every subsequent screen + the registration payload reflect the user's choice.
+  const [activeLang, setActiveLang] = React.useState<SupportedLanguageCode>(currentLanguage());
+  React.useEffect(() => {
+    const onChanged = () => setActiveLang(currentLanguage());
+    i18n.on("languageChanged", onChanged);
+    return () => {
+      i18n.off("languageChanged", onChanged);
+    };
+  }, [i18n]);
+  const chooseLang = React.useCallback(
+    async (code: SupportedLanguageCode) => {
+      if (busy || code === activeLang) return;
+      try {
+        await setLanguage(code);
+        setActiveLang(code);
+      } catch {
+        /* non-fatal */
+      }
+    },
+    [busy, activeLang],
+  );
 
   const googleAuthConfig = React.useMemo(() => getGoogleIdTokenAuthConfig(), []);
   const googleConfigured = Boolean(
@@ -211,6 +240,9 @@ export default function RegisterScreen({ navigation }: { navigation: any }) {
           acceptances,
           appVersion: appVersionString(),
           platform: Platform.OS,
+          // Forward-compatible profile hint. Backend safely ignores unknown
+          // fields today; once a `language` column lands it is persisted.
+          language: activeLang,
         },
       );
       const u = json?.user;
@@ -244,6 +276,37 @@ export default function RegisterScreen({ navigation }: { navigation: any }) {
       <View style={styles.brandUnderline} />
       <Text style={styles.title}>{t("auth.signUpTitle")}</Text>
       <Text style={styles.tagline}>{t("auth.signUpTagline")}</Text>
+
+      <CardContainer glow style={{ width: "100%", marginBottom: 12 }}>
+        <Text style={styles.helper}>{t("auth.chooseLanguage")}</Text>
+        <View style={{ height: 8 }} />
+        <View style={styles.langRow}>
+          {SUPPORTED_LANGUAGES.map((lang) => {
+            const selected = activeLang === lang.code;
+            return (
+              <Pressable
+                key={lang.code}
+                onPress={() => chooseLang(lang.code)}
+                disabled={busy}
+                accessibilityRole="radio"
+                accessibilityState={{ selected, disabled: busy }}
+                accessibilityLabel={`Set language to ${lang.englishName}`}
+                style={({ pressed }) => [
+                  styles.langPill,
+                  selected && styles.langPillSelected,
+                  pressed && !selected && !busy && styles.langPillPressed,
+                ]}
+              >
+                <Text style={[styles.langPillText, selected && styles.langPillTextSelected]}>
+                  {lang.nativeName}
+                </Text>
+                <Text style={styles.langPillCode}>{lang.code.toUpperCase()}</Text>
+              </Pressable>
+            );
+          })}
+        </View>
+        <Text style={[styles.helper, styles.langHint]}>{t("auth.chooseLanguageHint")}</Text>
+      </CardContainer>
 
       <CardContainer glow style={{ width: "100%" }}>
         {googleConfigured && request ? (
@@ -465,6 +528,34 @@ const styles = StyleSheet.create({
   helper: { color: theme.colors.textMuted, textAlign: "center", fontSize: 12 },
   or: { color: theme.colors.textMuted, textAlign: "center", fontWeight: "700" },
   roleRow: { flexDirection: "row", width: "100%", justifyContent: "center", alignItems: "stretch" },
+  langRow: { flexDirection: "row", width: "100%", justifyContent: "center", gap: 10 },
+  langPill: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: theme.radius.md,
+    borderWidth: 1.5,
+    borderColor: "rgba(255,255,255,0.12)",
+    backgroundColor: "rgba(255,255,255,0.04)",
+  },
+  langPillSelected: {
+    borderColor: theme.colors.gold,
+    backgroundColor: "rgba(245,200,66,0.12)",
+  },
+  langPillPressed: { opacity: 0.7 },
+  langPillText: { color: theme.colors.text, fontSize: 14, fontWeight: "700" },
+  langPillTextSelected: { color: theme.colors.gold },
+  langPillCode: {
+    color: theme.colors.textMuted,
+    fontSize: 11,
+    fontWeight: "800",
+    letterSpacing: 0.6,
+  },
+  langHint: { marginTop: 10, fontSize: 11.5 },
   input: {
     backgroundColor: "rgba(255,255,255,0.05)",
     borderWidth: 1,

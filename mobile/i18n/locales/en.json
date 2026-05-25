@@ -62,7 +62,9 @@
     "consentNotifications": "Send me booking reminders and important updates by push and email. (Optional)",
     "consentRequiredTitle": "Required acceptance",
     "consentRequiredBody": "Please review and accept the Terms & Conditions and the Privacy Policy to continue.",
-    "policyVersion": "Policy version {{version}}"
+    "policyVersion": "Policy version {{version}}",
+    "chooseLanguage": "Choose your language",
+    "chooseLanguageHint": "You can change this later in Profile."
   },
   "tabs": {
     "home": "Home",
