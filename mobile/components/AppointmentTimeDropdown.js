@@ -7,6 +7,7 @@ import {
   Text,
   View,
 } from 'react-native';
+import { useTranslation } from 'react-i18next';
 
 const ROW_HEIGHT = 44;
 const VISIBLE_ROWS = 5.5;
@@ -14,16 +15,23 @@ const MENU_MAX_HEIGHT = Math.round(ROW_HEIGHT * VISIBLE_ROWS);
 
 /**
  * Compact inline appointment time selector — available slots only.
+ *
+ * Defaults for `label` and `placeholder` are translated at render time using
+ * the active i18n language. Callers may pass an explicit string to override.
+ *
  * @param {{ label?: string, placeholder?: string, value: string|null, options: string[], disabled?: boolean, onSelect: (time: string) => void }} props
  */
 export default function AppointmentTimeDropdown({
-  label = 'Select Appointment Time',
-  placeholder = 'Choose a time',
+  label,
+  placeholder,
   value,
   options = [],
   disabled = false,
   onSelect,
 }) {
+  const { t } = useTranslation();
+  const labelText = label ?? t('booking.selectTime');
+  const placeholderText = placeholder ?? t('booking.selectTimePlaceholder');
   const [open, setOpen] = useState(false);
 
   const hasOptions = options.length > 0;
@@ -49,7 +57,7 @@ export default function AppointmentTimeDropdown({
 
   return (
     <View style={[styles.wrap, open && styles.wrapOpen]}>
-      <Text style={styles.label}>{label}</Text>
+      <Text style={styles.label}>{labelText}</Text>
       <Pressable
         onPress={toggleOpen}
         disabled={fieldDisabled}
@@ -60,11 +68,11 @@ export default function AppointmentTimeDropdown({
           pressed && !fieldDisabled && styles.fieldPressed,
         ]}
         accessibilityRole="button"
-        accessibilityLabel={label}
+        accessibilityLabel={labelText}
         accessibilityState={{ disabled: fieldDisabled, expanded: open }}
       >
         <Text style={[styles.fieldText, !value && styles.placeholder]} numberOfLines={1}>
-          {value || placeholder}
+          {value || placeholderText}
         </Text>
         <Text style={[styles.chevron, open && styles.chevronOpen]}>{open ? '▴' : '▾'}</Text>
       </Pressable>

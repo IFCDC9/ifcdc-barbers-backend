@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
+import { useTranslation } from 'react-i18next';
 import * as WebBrowser from 'expo-web-browser';
 import * as Linking from 'expo-linking';
 import { calculateFinalBookingTotal } from '../lib/bookingPaymentTotals.js';
@@ -61,6 +62,15 @@ function buildDateOptions(count = 7) {
 
 function BookingScreen() {
   const navigation = useNavigation();
+  const { t } = useTranslation();
+  /**
+   * Translate a date label produced by buildDateOptions() to the user's
+   * language for DISPLAY only. The underlying value (English: "Today",
+   * "Tomorrow", "Monday"…) is preserved in state and sent to the backend
+   * unchanged so the API contract is untouched.
+   */
+  const dateDisplay = (v) =>
+    t(`booking.dates.${String(v || '').toLowerCase()}`, { defaultValue: v });
   const [step, setStep] = useState(1);
   const [barber, setBarber] = useState(null);
   const [date, setDate] = useState(null);
@@ -110,13 +120,13 @@ function BookingScreen() {
           .map((b) => ({ id: b.id, name: String(b.name || '').trim() }))
           .filter((b) => b.name);
         setBarbers(items);
-        setBarbersError(items.length ? null : 'No barbers available.');
+        setBarbersError(items.length ? null : t('booking.noBarbers'));
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         console.warn('[booking] fetch barbers failed:', msg, e?.url);
         if (!alive) return;
         setBarbers([]);
-        setBarbersError('Unable to load barbers right now. Please try again.');
+        setBarbersError(t('booking.loadBarbersError'));
         reportConnectionFailure({
           kind: 'network',
           url: e?.url,
@@ -233,7 +243,7 @@ function BookingScreen() {
         console.log('available-slots', e);
         if (!cancelled) {
           setAvailableSlots([]);
-          setSlotsError('Unable to load available times. Please try again.');
+          setSlotsError(t('booking.loadTimesError'));
         }
       } finally {
         if (!cancelled) setSlotsLoading(false);
@@ -263,7 +273,7 @@ function BookingScreen() {
   const onConfirmPayAndBook = async () => {
     if (processingPayment || !barber?.name || !date || !time || !selectedService?.id) {
       if (!selectedService?.id) {
-        Alert.alert('Select a service', 'Choose a service before completing checkout.');
+        Alert.alert(t('booking.selectServiceTitle'), t('booking.selectServiceBody'));
       }
       return;
     }
@@ -273,10 +283,10 @@ function BookingScreen() {
 
     let checkoutSucceeded = false;
     setProcessingPayment(true);
-    setPhaseLabel('Processing payment...');
+    setPhaseLabel(t('booking.phases.processingPayment'));
 
     try {
-      setPhaseLabel('Checking time slot…');
+      setPhaseLabel(t('booking.phases.checkingSlot'));
       const slotCheck = await fetchAvailableSlots({
         barberId: barber.id,
         barberName: barber.name,
@@ -284,10 +294,7 @@ function BookingScreen() {
       });
       const stillOpen = slotCheck.slots?.some((s) => s.available && s.time === time);
       if (!stillOpen) {
-        Alert.alert(
-          'This time is no longer available.',
-          'That slot was just booked. Please go back and choose another time.',
-        );
+        Alert.alert(t('booking.slotTakenTitle'), t('booking.slotTakenBody'));
         setStep(4);
         setTime(null);
         setAvailableSlots(slotCheck.slots || []);
@@ -301,7 +308,7 @@ function BookingScreen() {
 
       const redirectUri = Linking.createURL('paypal-booking/');
 
-      setPhaseLabel('Creating secure checkout...');
+      setPhaseLabel(t('booking.phases.creatingCheckout'));
       const barberUuid =
         typeof barber?.id === 'string' && barber.id.includes('-') ? barber.id : barber?.uuid;
       const started = await startAppBookingCheckout({
@@ -320,11 +327,11 @@ function BookingScreen() {
         throw new Error('Server did not return PayPal checkout');
       }
 
-      setPhaseLabel('Complete payment in PayPal…');
+      setPhaseLabel(t('booking.phases.completePayment'));
       const browser = await WebBrowser.openAuthSessionAsync(approveUrl, redirectUri);
 
       if (browser.type === 'cancel' || browser.type === 'dismiss') {
-        Alert.alert('Payment cancelled', 'You can try again when ready.');
+        Alert.alert(t('booking.paymentCancelledTitle'), t('booking.paymentCancelledBody'));
         return;
       }
 
@@ -334,7 +341,7 @@ function BookingScreen() {
         if (token) paidOrderId = token;
       }
 
-      setPhaseLabel('Verifying booking...');
+      setPhaseLabel(t('booking.phases.verifyingBooking'));
       const finalized = await finalizeAppBookingCheckout(paidOrderId);
       const b = finalized?.booking;
       if (!b?.id) {
@@ -354,7 +361,7 @@ function BookingScreen() {
         servicePrice: Number(b.haircutPrice ?? servicePrice),
         captureId: b.captureId,
       });
-      setPhaseLabel('Booking confirmed');
+      setPhaseLabel(t('booking.phases.confirmed'));
       checkoutSucceeded = true;
       setStep(6);
     } catch (err) {
@@ -373,9 +380,9 @@ function BookingScreen() {
         /undefined|null|not_found|localhost|127\.0\.0\.1|http:\/\//i.test(rawMsg) ||
         rawMsg.length > 160;
       const msg = looksLikeDevText
-        ? 'Action could not be completed right now. Please try again.'
+        ? t('errors.actionCouldNotBeCompleted')
         : rawMsg;
-      Alert.alert('Checkout', msg);
+      Alert.alert(t('booking.checkoutAlertTitle'), msg);
     } finally {
       setProcessingPayment(false);
       if (!checkoutSucceeded) {
@@ -405,7 +412,7 @@ function BookingScreen() {
           showsVerticalScrollIndicator={false}
         >
           <Text style={{ color: '#FFD700', fontSize: 26, fontWeight: '700', marginBottom: 8 }}>
-            Booking confirmed
+            {t('booking.confirmedTitle')}
           </Text>
           <Text style={{ color: '#888', marginBottom: 20 }}>{phaseLabel}</Text>
 
@@ -422,32 +429,34 @@ function BookingScreen() {
             }}
           >
             <Text style={{ color: '#FFD700', fontSize: 16 }}>✓</Text>
-            <Text style={{ color: '#666', marginTop: 8, fontSize: 13 }}>Booking confirmed</Text>
+            <Text style={{ color: '#666', marginTop: 8, fontSize: 13 }}>
+              {t('booking.confirmedTitle')}
+            </Text>
           </View>
 
           <View style={{ backgroundColor: '#111', borderRadius: 12, padding: 16, marginBottom: 16 }}>
             <Text style={{ color: '#fff', marginBottom: 6 }}>
-              <Text style={{ color: '#888' }}>Service </Text>
+              <Text style={{ color: '#888' }}>{t('booking.service')} </Text>
               {successPayload.service || '—'}
             </Text>
             <Text style={{ color: '#fff', marginBottom: 6 }}>
-              <Text style={{ color: '#888' }}>Barber </Text>
+              <Text style={{ color: '#888' }}>{t('booking.barber')} </Text>
               {successPayload.barber}
             </Text>
             <Text style={{ color: '#fff', marginBottom: 6 }}>
-              <Text style={{ color: '#888' }}>When </Text>
-              {successPayload.date} · {successPayload.time}
+              <Text style={{ color: '#888' }}>{t('booking.when')} </Text>
+              {dateDisplay(successPayload.date)} · {successPayload.time}
             </Text>
             <Text style={{ color: '#fff', marginBottom: 6 }}>
-              <Text style={{ color: '#888' }}>Deposit paid </Text>$
+              <Text style={{ color: '#888' }}>{t('booking.depositPaid')} </Text>$
               {Number(successPayload.depositPaid).toFixed(2)}
             </Text>
             <Text style={{ color: '#fff', marginBottom: 6 }}>
-              <Text style={{ color: '#888' }}>Remaining balance </Text>$
+              <Text style={{ color: '#888' }}>{t('booking.remainingBalance')} </Text>$
               {Number(successPayload.remainingBalance).toFixed(2)}
             </Text>
             <Text style={{ color: '#FFD700', marginTop: 10, fontSize: 18 }}>
-              Booking ID{' '}
+              {t('booking.bookingId')}{' '}
               <Text style={{ color: '#fff' }}>{successPayload.bookingId || '—'}</Text>
             </Text>
           </View>
@@ -455,14 +464,14 @@ function BookingScreen() {
           <View style={{ alignItems: 'center', marginBottom: 16 }}>
             <ShareButton
               variant="block"
-              label="Share booking"
-              title={`Booking confirmed · ${APP_BRAND_NAME}`}
+              label={t('booking.shareBooking')}
+              title={`${t('booking.confirmedTitle')} · ${APP_BRAND_NAME}`}
               message={buildBookingShareMessage({
                 serviceName: successPayload.service,
                 barberName: successPayload.barber,
                 whenLabel:
                   successPayload.date && successPayload.time
-                    ? `${successPayload.date} · ${successPayload.time}`
+                    ? `${dateDisplay(successPayload.date)} · ${successPayload.time}`
                     : null,
               })}
             />
@@ -479,7 +488,9 @@ function BookingScreen() {
               borderRadius: 12,
             }}
           >
-            <Text style={{ color: '#000', textAlign: 'center', fontWeight: '700' }}>Done</Text>
+            <Text style={{ color: '#000', textAlign: 'center', fontWeight: '700' }}>
+              {t('common.done')}
+            </Text>
           </TouchableOpacity>
         </ScrollView>
       </SafeAreaView>
@@ -497,15 +508,19 @@ function BookingScreen() {
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
-        <Text style={{ color: '#FFD700', fontSize: 22, marginBottom: 20 }}>Booking</Text>
+        <Text style={{ color: '#FFD700', fontSize: 22, marginBottom: 20 }}>
+          {t('booking.screenTitle')}
+        </Text>
 
         {step === 1 && (
           <>
-            <Text style={{ color: '#fff', marginBottom: 10 }}>Select Barber</Text>
+            <Text style={{ color: '#fff', marginBottom: 10 }}>{t('booking.selectBarber')}</Text>
             {barbersLoading ? (
               <View style={{ alignItems: "center", marginVertical: 16, gap: 8 }}>
                 <ActivityIndicator color="#FFD700" />
-                <Text style={{ color: "rgba(255,255,255,0.55)", fontSize: 14 }}>Loading…</Text>
+                <Text style={{ color: "rgba(255,255,255,0.55)", fontSize: 14 }}>
+                  {t('common.loading')}
+                </Text>
               </View>
             ) : null}
             {barbersError ? (
@@ -528,7 +543,7 @@ function BookingScreen() {
 
         {step === 2 && (
           <>
-            <Text style={{ color: '#fff', marginBottom: 10 }}>Select Date</Text>
+            <Text style={{ color: '#fff', marginBottom: 10 }}>{t('booking.selectDate')}</Text>
             {dates.map((d) => (
               <TouchableOpacity
                 key={d}
@@ -540,7 +555,7 @@ function BookingScreen() {
                 }}
                 style={styles.rowBtn}
               >
-                <Text style={{ color: '#fff' }}>{d}</Text>
+                <Text style={{ color: '#fff' }}>{dateDisplay(d)}</Text>
               </TouchableOpacity>
             ))}
           </>
@@ -549,18 +564,20 @@ function BookingScreen() {
         {step === 3 && (
           <>
             <View style={styles.summaryCard}>
-              <Text style={styles.summaryLabel}>Barber</Text>
+              <Text style={styles.summaryLabel}>{t('booking.barber')}</Text>
               <Text style={styles.summaryValue}>{barber?.name}</Text>
-              <Text style={[styles.summaryLabel, { marginTop: 12 }]}>Date</Text>
-              <Text style={styles.summaryValue}>{date}</Text>
+              <Text style={[styles.summaryLabel, { marginTop: 12 }]}>{t('booking.date')}</Text>
+              <Text style={styles.summaryValue}>{dateDisplay(date)}</Text>
             </View>
 
-            <Text style={styles.sectionTitle}>Choose Service</Text>
+            <Text style={styles.sectionTitle}>{t('booking.chooseService')}</Text>
 
             {servicesLoading ? (
               <View style={{ alignItems: 'center', marginVertical: 24, gap: 8 }}>
                 <ActivityIndicator color="#FFD700" />
-                <Text style={{ color: 'rgba(255,255,255,0.55)', fontSize: 14 }}>Loading services…</Text>
+                <Text style={{ color: 'rgba(255,255,255,0.55)', fontSize: 14 }}>
+                  {t('booking.loadingServices')}
+                </Text>
               </View>
             ) : (
               services.map((service) => (
@@ -578,7 +595,7 @@ function BookingScreen() {
                 onPress={() => setServicesLoadKey((k) => k + 1)}
                 style={styles.retryLink}
               >
-                <Text style={styles.retryLinkText}>Retry loading services</Text>
+                <Text style={styles.retryLinkText}>{t('booking.retryServices')}</Text>
               </TouchableOpacity>
             ) : null}
 
@@ -595,11 +612,11 @@ function BookingScreen() {
                 (!selectedService || servicesLoading) && styles.continueBtnDisabled,
               ]}
             >
-              <Text style={styles.continueBtnText}>Continue</Text>
+              <Text style={styles.continueBtnText}>{t('common.continue')}</Text>
             </TouchableOpacity>
 
             <TouchableOpacity onPress={() => setStep(2)} style={styles.backLink}>
-              <Text style={styles.backLinkText}>Change date</Text>
+              <Text style={styles.backLinkText}>{t('booking.changeDate')}</Text>
             </TouchableOpacity>
           </>
         )}
@@ -607,18 +624,20 @@ function BookingScreen() {
         {step === 4 && (
           <>
             <View style={styles.summaryCard}>
-              <Text style={styles.summaryLabel}>Barber</Text>
+              <Text style={styles.summaryLabel}>{t('booking.barber')}</Text>
               <Text style={styles.summaryValue}>{barber?.name}</Text>
-              <Text style={[styles.summaryLabel, { marginTop: 12 }]}>Date</Text>
-              <Text style={styles.summaryValue}>{date}</Text>
-              <Text style={[styles.summaryLabel, { marginTop: 12 }]}>Service</Text>
+              <Text style={[styles.summaryLabel, { marginTop: 12 }]}>{t('booking.date')}</Text>
+              <Text style={styles.summaryValue}>{dateDisplay(date)}</Text>
+              <Text style={[styles.summaryLabel, { marginTop: 12 }]}>{t('booking.service')}</Text>
               <Text style={styles.summaryValue}>{selectedService?.name || '—'}</Text>
             </View>
 
             {slotsLoading ? (
               <View style={{ alignItems: "center", marginVertical: 24, gap: 8 }}>
                 <ActivityIndicator color="#FFD700" />
-                <Text style={{ color: "rgba(255,255,255,0.55)", fontSize: 14 }}>Loading…</Text>
+                <Text style={{ color: "rgba(255,255,255,0.55)", fontSize: 14 }}>
+                  {t('common.loading')}
+                </Text>
               </View>
             ) : null}
 
@@ -627,7 +646,7 @@ function BookingScreen() {
             ) : null}
 
             {!slotsLoading && !slotsError && !hasOpenSlots ? (
-              <Text style={styles.emptyText}>No available times for this date.</Text>
+              <Text style={styles.emptyText}>{t('booking.noTimes')}</Text>
             ) : null}
 
             {!slotsLoading && hasOpenSlots ? (
@@ -649,23 +668,25 @@ function BookingScreen() {
                 (!time || slotsLoading) && styles.continueBtnDisabled,
               ]}
             >
-              <Text style={styles.continueBtnText}>Continue</Text>
+              <Text style={styles.continueBtnText}>{t('common.continue')}</Text>
             </TouchableOpacity>
 
             <TouchableOpacity onPress={() => setStep(3)} style={styles.backLink}>
-              <Text style={styles.backLinkText}>Change service</Text>
+              <Text style={styles.backLinkText}>{t('booking.changeService')}</Text>
             </TouchableOpacity>
           </>
         )}
 
         {step === 5 && (
           <View>
-            <Text style={{ color: '#FFD700', fontSize: 18, marginBottom: 10 }}>Confirm Booking</Text>
+            <Text style={{ color: '#FFD700', fontSize: 18, marginBottom: 10 }}>
+              {t('booking.confirmTitle')}
+            </Text>
 
-            <Text style={{ color: '#fff' }}>Barber: {barber?.name}</Text>
-            <Text style={{ color: '#fff' }}>Date: {date}</Text>
-            <Text style={{ color: '#fff' }}>Service: {selectedService?.name || '—'}</Text>
-            <Text style={{ color: '#fff' }}>Time: {time}</Text>
+            <Text style={{ color: '#fff' }}>{t('booking.barber')}: {barber?.name}</Text>
+            <Text style={{ color: '#fff' }}>{t('booking.date')}: {dateDisplay(date)}</Text>
+            <Text style={{ color: '#fff' }}>{t('booking.service')}: {selectedService?.name || '—'}</Text>
+            <Text style={{ color: '#fff' }}>{t('booking.time')}: {time}</Text>
 
             <View
               style={{
@@ -676,17 +697,17 @@ function BookingScreen() {
               }}
             >
               <Text style={{ color: '#fff' }}>
-                {selectedService?.name || 'Service'}: ${pricing.haircutPrice.toFixed(2)}
+                {selectedService?.name || t('booking.service')}: ${pricing.haircutPrice.toFixed(2)}
               </Text>
               {pricing.depositAmount > 0 ? (
-                <Text style={{ color: '#fff' }}>Deposit: ${pricing.depositAmount.toFixed(2)}</Text>
+                <Text style={{ color: '#fff' }}>{t('booking.deposit')}: ${pricing.depositAmount.toFixed(2)}</Text>
               ) : null}
-              <Text style={{ color: '#FFD700' }}>Platform Fee: ${pricing.platformFee.toFixed(2)}</Text>
+              <Text style={{ color: '#FFD700' }}>{t('booking.platformFee')}: ${pricing.platformFee.toFixed(2)}</Text>
               <Text style={{ color: '#fff', marginTop: 10, fontSize: 18 }}>
-                Total (charged on PayPal): ${pricing.total.toFixed(2)}
+                {t('booking.totalPayPal')}: ${pricing.total.toFixed(2)}
               </Text>
               <Text style={{ color: '#666', fontSize: 12, marginTop: 8 }}>
-                Amount is set on the server when you pay — the app does not send totals to PayPal.
+                {t('booking.amountServerNote')}
               </Text>
             </View>
 
@@ -709,7 +730,9 @@ function BookingScreen() {
               onPress={onConfirmPayAndBook}
             >
               <Text style={{ color: '#000', textAlign: 'center', fontWeight: '700' }}>
-                {processingPayment ? 'Processing…' : `Pay $${pricing.total.toFixed(2)} with PayPal`}
+                {processingPayment
+                  ? t('common.processing')
+                  : t('booking.payWithPayPal', { amount: `$${pricing.total.toFixed(2)}` })}
               </Text>
             </TouchableOpacity>
 
@@ -717,7 +740,7 @@ function BookingScreen() {
               onPress={() => setStep(4)}
               style={{ marginTop: 14, padding: 12 }}
             >
-              <Text style={{ color: '#888', textAlign: 'center' }}>Change time</Text>
+              <Text style={{ color: '#888', textAlign: 'center' }}>{t('booking.changeTime')}</Text>
             </TouchableOpacity>
           </View>
         )}

@@ -1,5 +1,6 @@
 import React from "react";
 import { StyleSheet, Text, View } from "react-native";
+import { useTranslation } from "react-i18next";
 import { theme } from "../constants/theme";
 import {
   bookingStatusLabel,
@@ -36,6 +37,10 @@ function toneStyles(tone: BookingStatusTone) {
 }
 
 export default function BookingStatusBadge({ paymentStatus, bookingStatus, compact }: Props) {
+  // Subscribe to language changes so the pill re-renders when the user
+  // switches languages. The label itself is computed via bookingStatusLabel,
+  // which reads from i18n with an English fallback.
+  useTranslation();
   const tone = bookingStatusTone(paymentStatus, bookingStatus);
   const stylesForTone = toneStyles(tone);
   const label = bookingStatusLabel(paymentStatus, bookingStatus);

@@ -1,5 +1,6 @@
 import React from 'react';
 import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useTranslation } from 'react-i18next';
 import { apiFullUrl } from '../constants/config';
 
 /**
@@ -7,6 +8,7 @@ import { apiFullUrl } from '../constants/config';
  * @param {{ service: object, selected?: boolean, onPress: () => void }} props
  */
 export default function ServicePickerCard({ service, selected = false, onPress }) {
+  const { t } = useTranslation();
   const icon = service.icon || '✂️';
   const price = Number(service.price);
   const duration = Number(service.duration_minutes) || 30;
@@ -40,7 +42,7 @@ export default function ServicePickerCard({ service, selected = false, onPress }
           </Text>
         ) : null}
         <Text style={styles.meta}>
-          ${Number.isFinite(price) ? price.toFixed(2) : '—'} · {duration} min
+          ${Number.isFinite(price) ? price.toFixed(2) : '—'} · {duration} {t('services.minSuffix')}
         </Text>
       </View>
       {selected ? <Text style={styles.check}>✓</Text> : null}

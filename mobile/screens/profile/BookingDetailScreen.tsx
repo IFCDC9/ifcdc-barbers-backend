@@ -1,5 +1,6 @@
 import React, { useCallback, useMemo, useState } from "react";
 import { Alert, Linking, StyleSheet, Text, View } from "react-native";
+import { useTranslation } from "react-i18next";
 import { ScreenLoading } from "../../components/LoadingState";
 import {
   NavigationProp,
@@ -135,6 +136,7 @@ function StatusTimeline({
   bookingCreatedAt?: string;
   currentStatus?: string;
 }) {
+  const { t } = useTranslation();
   const rows: BookingStatusHistoryRow[] = useMemo(() => {
     if (history.length === 0 && bookingCreatedAt && currentStatus) {
       return [
@@ -144,16 +146,16 @@ function StatusTimeline({
           new_status: currentStatus,
           changed_by_role: "system",
           changed_at: bookingCreatedAt,
-          note: "Initial booking",
+          note: t("booking.details.initialBooking"),
           synthetic: true,
         },
       ];
     }
     return history;
-  }, [history, bookingCreatedAt, currentStatus]);
+  }, [history, bookingCreatedAt, currentStatus, t]);
 
   if (rows.length === 0) {
-    return <Text style={styles.muted}>Timeline will appear once the booking is updated.</Text>;
+    return <Text style={styles.muted}>{t("booking.details.timelineEmpty")}</Text>;
   }
 
   return (
@@ -181,7 +183,7 @@ function StatusTimeline({
                 {rawBookingStatusLabel(row.new_status)}
               </Text>
               <Text style={timelineStyles.metaLine}>{formatTimelineDate(row.changed_at)}</Text>
-              <Text style={timelineStyles.metaLine}>by {describeActor(row)}</Text>
+              <Text style={timelineStyles.metaLine}>{t("booking.details.by")} {describeActor(row)}</Text>
               {row.note ? <Text style={timelineStyles.note}>{row.note}</Text> : null}
             </View>
           </View>
@@ -201,15 +203,18 @@ export default function BookingDetailScreen() {
   const navigation = useNavigation<NavigationProp<NavParams>>();
   const { bookingId } = route.params;
   const { user } = useAuth();
+  const { t } = useTranslation();
   const role = resolveActorRole(user?.role);
+  // Customer-facing subtitles are translated; staff/admin subtitles are kept
+  // in English (operational consoles per Phase 2 directive).
   const subtitle =
     role === "customer"
-      ? "Your appointment"
+      ? t("booking.details.subtitleCustomer")
       : role === "barber"
-        ? "Barber console"
+        ? t("booking.details.subtitleBarber")
         : role === "shop_owner"
-          ? "Shop console"
-          : "Admin console";
+          ? t("booking.details.subtitleShop")
+          : t("booking.details.subtitleAdmin");
 
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -340,26 +345,28 @@ export default function BookingDetailScreen() {
       };
 
       if (destructive) {
+        // Customer-facing cancel/reschedule prompts are translated; the
+        // staff/admin variants intentionally stay in English (operational).
         const messageMap: Record<string, string> = {
           cancelled:
             role === "customer"
-              ? "Cancel this appointment? If you paid online, refunds are reviewed by the shop and aren't automatic."
+              ? t("booking.details.customerCancelMessage")
               : "Cancel this booking? The customer keeps any prior PayPal capture until a refund is issued in the provider console.",
           no_show:
             "Mark this customer as a no-show? This is recorded in the booking history and can affect their account.",
           rescheduled:
             role === "customer"
-              ? "Request to reschedule this appointment? The shop will follow up with a new slot."
+              ? t("booking.details.customerRescheduleMessage")
               : "Mark this booking as needing a reschedule? You'll need to confirm a new time afterward.",
         };
         Alert.alert(label, messageMap[target] || "This action will change the booking record.", [
-          { text: "Keep as is", style: "cancel" },
+          { text: t("common.keepAsIs"), style: "cancel" },
           { text: label, style: "destructive", onPress: () => void proceed() },
         ]);
       } else {
         Alert.alert(label, `${label}?`, [
-          { text: "Cancel", style: "cancel" },
-          { text: "Confirm", onPress: () => void proceed() },
+          { text: t("common.cancel"), style: "cancel" },
+          { text: t("common.confirm"), onPress: () => void proceed() },
         ]);
       }
     },
@@ -392,8 +399,8 @@ export default function BookingDetailScreen() {
     if (role === "customer") {
       const shop = String(booking.shop_name || "the shop").trim();
       Alert.alert(
-        "Contact shop",
-        `For questions about this appointment, please reach out to ${shop} directly.`,
+        t("booking.details.contactShopAlertTitle"),
+        t("booking.details.contactShopAlertBody", { shop }),
       );
       return;
     }
@@ -486,7 +493,7 @@ export default function BookingDetailScreen() {
 
   if (loading) {
     return (
-      <ProfileScreenLayout title="Booking detail" subtitle={subtitle}>
+      <ProfileScreenLayout title={t("booking.details.title")} subtitle={subtitle}>
         <ScreenLoading />
       </ProfileScreenLayout>
     );
@@ -494,10 +501,14 @@ export default function BookingDetailScreen() {
 
   if (!booking) {
     return (
-      <ProfileScreenLayout title="Booking detail" subtitle={subtitle}>
-        <Text style={styles.muted}>This appointment isn't available.</Text>
+      <ProfileScreenLayout title={t("booking.details.title")} subtitle={subtitle}>
+        <Text style={styles.muted}>{t("booking.details.notAvailable")}</Text>
         <View style={{ height: 12 }} />
-        <GlowButton label="Go back" variant="outline" onPress={() => navigation.goBack()} />
+        <GlowButton
+          label={t("booking.details.goBack")}
+          variant="outline"
+          onPress={() => navigation.goBack()}
+        />
       </ProfileScreenLayout>
     );
   }
@@ -516,12 +527,12 @@ export default function BookingDetailScreen() {
       : "—";
 
   return (
-    <ProfileScreenLayout title="Booking detail" subtitle={subtitle} headerTopPad={12}>
+    <ProfileScreenLayout title={t("booking.details.title")} subtitle={subtitle} headerTopPad={12}>
       <ProfileCard style={styles.hero}>
         <View style={styles.heroTop}>
           <View style={styles.heroCopy}>
             <Text style={styles.service}>
-              {booking.service || booking.style_title || "Appointment"}
+              {booking.service || booking.style_title || t("booking.details.appointment")}
             </Text>
             <Text style={styles.when}>{appointmentWhen}</Text>
           </View>
@@ -536,7 +547,7 @@ export default function BookingDetailScreen() {
       </ProfileCard>
 
       <ProfileCard style={styles.section}>
-        <Text style={styles.sectionTitle}>Status timeline</Text>
+        <Text style={styles.sectionTitle}>{t("booking.details.statusTimeline")}</Text>
         <StatusTimeline
           history={history}
           bookingCreatedAt={booking.created_at}
@@ -545,44 +556,51 @@ export default function BookingDetailScreen() {
       </ProfileCard>
 
       <ProfileCard style={styles.section}>
-        <Text style={styles.sectionTitle}>Customer</Text>
-        <MetaRow label="Name" value={customerName} />
-        <MetaRow label="Email" value={customerEmail} />
+        <Text style={styles.sectionTitle}>{t("booking.details.customer")}</Text>
+        <MetaRow label={t("booking.details.name")} value={customerName} />
+        <MetaRow label={t("booking.details.email")} value={customerEmail} />
         {role !== "customer" ? (
-          <MetaRow label="Phone" value={booking.phone ? String(booking.phone) : "—"} />
+          <MetaRow
+            label={t("booking.details.phone")}
+            value={booking.phone ? String(booking.phone) : "—"}
+          />
         ) : null}
       </ProfileCard>
 
       <ProfileCard style={styles.section}>
-        <Text style={styles.sectionTitle}>Appointment</Text>
-        <MetaRow label="Booking ID" value={String(booking.id)} />
-        <MetaRow label="Barber" value={booking.barber_name || "—"} />
-        <MetaRow label="Shop" value={booking.shop_name || "—"} />
-        <MetaRow label="Service" value={booking.service || booking.style_title || "—"} />
-        <MetaRow label="Duration" value={durationLabel} />
-        <MetaRow label="Scheduled" value={appointmentWhen} />
+        <Text style={styles.sectionTitle}>{t("booking.details.appointment")}</Text>
+        <MetaRow label={t("booking.bookingId")} value={String(booking.id)} />
+        <MetaRow label={t("booking.barber")} value={booking.barber_name || "—"} />
+        <MetaRow label={t("booking.details.shop")} value={booking.shop_name || "—"} />
         <MetaRow
-          label="Booking status"
+          label={t("booking.service")}
+          value={booking.service || booking.style_title || "—"}
+        />
+        <MetaRow label={t("booking.duration")} value={durationLabel} />
+        <MetaRow label={t("booking.details.scheduled")} value={appointmentWhen} />
+        <MetaRow
+          label={t("booking.details.bookingStatus")}
           value={rawBookingStatusLabel(booking.booking_status || "confirmed")}
         />
       </ProfileCard>
 
       <ProfileCard style={styles.section}>
-        <Text style={styles.sectionTitle}>Payment</Text>
+        <Text style={styles.sectionTitle}>{t("booking.details.payment")}</Text>
         <MetaRow
-          label="Payment status"
+          label={t("booking.details.paymentStatus")}
           value={String(booking.payment_status || "pending").replace(/_/g, " ")}
         />
-        <MetaRow label="Service price" value={servicePriceFor(booking)} />
-        <MetaRow label="Platform fee" value={formatMoney(booking.platform_fee)} />
+        <MetaRow label={t("booking.details.servicePrice")} value={servicePriceFor(booking)} />
+        <MetaRow label={t("booking.platformFee")} value={formatMoney(booking.platform_fee)} />
         <MetaRow
-          label="Total paid"
+          label={t("booking.details.totalPaid")}
           value={formatMoney(booking.total_paid ?? booking.total_amount)}
         />
-        <MetaRow label="Method" value={paymentMethodLabel(booking)} />
-        <MetaRow label="Summary" value={paymentBreakdown(booking)} />
+        <MetaRow label={t("booking.details.method")} value={paymentMethodLabel(booking)} />
+        <MetaRow label={t("booking.details.summaryRow")} value={paymentBreakdown(booking)} />
         {role !== "customer" ? (
           <>
+            {/* Operational PayPal references — kept in English per directive. */}
             <MetaRow label="PayPal order" value={booking.paypal_order_id || "—"} />
             <MetaRow label="PayPal capture" value={booking.paypal_capture_id || "—"} />
           </>
@@ -590,23 +608,26 @@ export default function BookingDetailScreen() {
       </ProfileCard>
 
       <ProfileCard style={styles.section}>
-        <Text style={styles.sectionTitle}>Notes</Text>
-        <MetaRow label="Details" value={notesValue} />
-        <MetaRow label="Created" value={formatCreatedAt(booking.created_at)} />
+        <Text style={styles.sectionTitle}>{t("booking.details.notes")}</Text>
+        <MetaRow label={t("booking.details.detailsRow")} value={notesValue} />
+        <MetaRow label={t("booking.details.created")} value={formatCreatedAt(booking.created_at)} />
         {booking.cancelled_at ? (
           <MetaRow
-            label="Cancelled"
+            label={t("booking.details.cancelledRow")}
             value={`${formatCreatedAt(booking.cancelled_at)}${
               booking.cancelled_by ? ` · ${String(booking.cancelled_by).replace(/_/g, " ")}` : ""
             }`}
           />
         ) : null}
         {booking.cancellation_reason ? (
-          <MetaRow label="Cancel reason" value={String(booking.cancellation_reason)} />
+          <MetaRow
+            label={t("booking.details.cancelReason")}
+            value={String(booking.cancellation_reason)}
+          />
         ) : null}
         {booking.rescheduled_at ? (
           <MetaRow
-            label="Last rescheduled"
+            label={t("booking.details.lastRescheduled")}
             value={`${formatCreatedAt(booking.rescheduled_at)}${
               booking.rescheduled_by ? ` · ${String(booking.rescheduled_by).replace(/_/g, " ")}` : ""
             }`}
@@ -614,7 +635,7 @@ export default function BookingDetailScreen() {
         ) : null}
         {booking.rescheduled_from_date ? (
           <MetaRow
-            label="Moved from"
+            label={t("booking.details.movedFrom")}
             value={`${String(booking.rescheduled_from_date).slice(0, 10)}${
               booking.rescheduled_from_time
                 ? ` at ${String(booking.rescheduled_from_time).slice(0, 5)}`
@@ -626,11 +647,16 @@ export default function BookingDetailScreen() {
 
       <View style={styles.actions}>
         {canViewReceipt ? (
-          <GlowButton label="View receipt" variant="outline" onPress={onViewReceipt} disabled={busy} />
+          <GlowButton
+            label={t("booking.details.viewReceipt")}
+            variant="outline"
+            onPress={onViewReceipt}
+            disabled={busy}
+          />
         ) : null}
         {canResend ? (
           <GlowButton
-            label="Resend confirmation"
+            label={t("booking.details.resendConfirmation")}
             variant="outline"
             onPress={() => void onResend()}
             disabled={busy}
@@ -638,7 +664,11 @@ export default function BookingDetailScreen() {
           />
         ) : null}
         <GlowButton
-          label={role === "customer" ? "Contact shop" : "Contact customer"}
+          label={
+            role === "customer"
+              ? t("booking.details.contactShop")
+              : t("booking.details.contactCustomer")
+          }
           variant="outline"
           onPress={onContact}
           disabled={busy}
@@ -648,10 +678,10 @@ export default function BookingDetailScreen() {
           variant="block"
           label={
             String(booking.booking_status || "").toLowerCase() === "completed"
-              ? "Share receipt"
-              : "Share booking"
+              ? t("booking.shareReceipt")
+              : t("booking.shareBooking")
           }
-          title={`${booking.service || "Appointment"} · ${APP_BRAND_NAME}`}
+          title={`${booking.service || t("booking.details.appointment")} · ${APP_BRAND_NAME}`}
           message={
             String(booking.booking_status || "").toLowerCase() === "completed"
               ? buildReceiptShareMessage({
@@ -670,11 +700,15 @@ export default function BookingDetailScreen() {
         />
 
         {canRescheduleHere ? (
-          <GlowButton label="Reschedule" onPress={onOpenReschedule} disabled={busy} />
+          <GlowButton
+            label={t("booking.details.rescheduleBtn")}
+            onPress={onOpenReschedule}
+            disabled={busy}
+          />
         ) : null}
         {canCancelHere ? (
           <GlowButton
-            label="Cancel appointment"
+            label={t("booking.details.cancelAppointment")}
             variant="outline"
             onPress={onOpenCancel}
             disabled={busy}
@@ -683,6 +717,11 @@ export default function BookingDetailScreen() {
 
         {statusActions.length > 0 ? (
           <View style={styles.statusGroup}>
+            {/*
+              Operational status panel: header + button labels for staff/admin
+              flows are intentionally kept in English per Phase 2 directive
+              ("admin/super_admin operational text in English").
+            */}
             <Text style={styles.statusGroupHeader}>
               {isOverride ? "Override status" : "Status actions"}
             </Text>
@@ -699,12 +738,13 @@ export default function BookingDetailScreen() {
         ) : !canRescheduleHere && !canCancelHere ? (
           <Text style={styles.terminalHint}>
             {isFinalStatus(booking.booking_status)
-              ? "This appointment has reached a final state."
-              : "No status changes are available from your role right now."}
+              ? t("booking.details.reachedFinalState")
+              : t("booking.details.noStatusChanges")}
           </Text>
         ) : null}
 
         {canRefund ? (
+          // Refund is admin/shop-owner only — operational; English label kept.
           <GlowButton
             label="Refund booking"
             variant="outline"

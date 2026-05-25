@@ -2,6 +2,7 @@ import React from "react"
 import { ScrollView, StyleSheet, Text, useWindowDimensions, View } from "react-native"
 import { useNavigation } from "@react-navigation/native"
 import { useSafeAreaInsets } from "react-native-safe-area-context"
+import { useTranslation } from "react-i18next"
 import CardContainer from "../../components/CardContainer"
 import DarkGradientBackground from "../../components/DarkGradientBackground"
 import GlowButton from "../../components/GlowButton"
@@ -13,6 +14,7 @@ const ExploreScreen = () => {
   const navigation = useNavigation<{ navigate: (name: "Book") => void }>()
   const insets = useSafeAreaInsets()
   const { width: screenWidth } = useWindowDimensions()
+  const { t } = useTranslation()
 
   const brandFontSize = screenWidth < 340 ? 11 : screenWidth < 375 ? 12 : 13
   const brandLetterSpacing = screenWidth < 340 ? 0.6 : screenWidth < 375 ? 1 : 1.4
@@ -40,16 +42,13 @@ const ExploreScreen = () => {
           >
             IFCDC BARBERS
           </Text>
-          <Text style={styles.tagline}>Cut. Style. Elevate.</Text>
+          <Text style={styles.tagline}>{t("home.tagline")}</Text>
         </View>
 
         <CardContainer style={styles.heroCard}>
-          <Text style={styles.heroTitle}>Book Appointment</Text>
-          <Text style={styles.heroCopy}>
-            Choose your barber, pick a time, and pay securely with PayPal. You will receive a
-            confirmation email when your booking is complete.
-          </Text>
-          <GlowButton label="Book Appointment →" onPress={() => navigation.navigate("Book")} />
+          <Text style={styles.heroTitle}>{t("home.heroTitle")}</Text>
+          <Text style={styles.heroCopy}>{t("home.heroCopy")}</Text>
+          <GlowButton label={t("home.heroCta")} onPress={() => navigation.navigate("Book")} />
         </CardContainer>
       </ScrollView>
     </View>

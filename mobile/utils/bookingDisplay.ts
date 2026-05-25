@@ -1,3 +1,5 @@
+import i18n from "../i18n";
+
 /** Hide internal placeholder emails from admin UI. */
 export function displayCustomerEmail(email?: string | null): string {
   const e = String(email || "").trim();
@@ -120,6 +122,10 @@ export function bookingStatusTone(paymentStatus?: string, bookingStatus?: string
   return "neutral";
 }
 
+/**
+ * English source-of-truth labels for every known booking status. These remain
+ * the fallback whenever the active language doesn't define a translation key.
+ */
 const BOOKING_STATUS_LABELS: Record<string, string> = {
   pending: "Pending",
   confirmed: "Confirmed",
@@ -131,10 +137,27 @@ const BOOKING_STATUS_LABELS: Record<string, string> = {
   rescheduled: "Rescheduled",
 };
 
+/**
+ * Look up a localized status label using i18n with a hard English fallback.
+ * Always returns a non-empty string for known statuses; gracefully degrades
+ * to a humanized version of unknown statuses.
+ */
+function localizedStatusLabel(rawStatus: string): string {
+  const key = `booking.status.${rawStatus}`;
+  const fallback =
+    BOOKING_STATUS_LABELS[rawStatus] ||
+    rawStatus.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  try {
+    const translated = i18n.t(key, { defaultValue: fallback });
+    return typeof translated === "string" && translated.length > 0 ? translated : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 export function bookingStatusLabel(paymentStatus?: string, bookingStatus?: string): string {
   const book = String(bookingStatus || "").trim().toLowerCase();
-  if (book && BOOKING_STATUS_LABELS[book]) return BOOKING_STATUS_LABELS[book];
-  if (book) return book.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  if (book) return localizedStatusLabel(book);
   const pay = String(paymentStatus || "pending").replace(/_/g, " ");
   return pay.replace(/\b\w/g, (c) => c.toUpperCase());
 }
@@ -143,5 +166,5 @@ export function bookingStatusLabel(paymentStatus?: string, bookingStatus?: strin
 export function rawBookingStatusLabel(status?: string | null): string {
   const s = String(status || "").trim().toLowerCase();
   if (!s) return "—";
-  return BOOKING_STATUS_LABELS[s] || s.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  return localizedStatusLabel(s);
 }
