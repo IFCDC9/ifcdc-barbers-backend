@@ -37,8 +37,10 @@ import {
 import {
   auraChatNavigateBook,
   auraChatNavigateStylesSuffix,
+  detectClientLanguage,
   normalizeBarberLang,
   openAiLanguageInstruction,
+  resolveAuraLanguage,
 } from "./auraLocale.js";
 import { loadBarberSettingsRow } from "./barberScope.js";
 import { barberAuraEffective } from "./subscriptionTier.js";
@@ -148,9 +150,16 @@ const AURA_FAILSAFE_REPLY =
   "AURA is temporarily reconnecting. Please try again in a moment.";
 
 /** Standard JSON body for all AURA chat routes. */
-function auraChatJson(reply, action = "NONE") {
+function auraChatJson(reply, action = "NONE", meta = null) {
   const message = String(reply || AURA_FAILSAFE_REPLY).trim();
-  return { success: true, message, reply: message, action };
+  const body = { success: true, message, reply: message, action };
+  if (meta && typeof meta === "object") {
+    if (meta.language) body.language = String(meta.language);
+    if (meta.replyLanguage) body.reply_language = String(meta.replyLanguage);
+    if (typeof meta.adminMessageEn === "string") body.admin_message_en = meta.adminMessageEn;
+    if (typeof meta.originalMessage === "string") body.original_message = meta.originalMessage;
+  }
+  return body;
 }
 
 /** JSON for GET /api/aura/status (no secrets). */
@@ -718,11 +727,13 @@ app.get("/api/config", (_req, res) => {
  * Response: { success: true, message, reply, action }
  */
 async function handleAuraChatRequest(req, res) {
+  const clientLangHint = detectClientLanguage(req);
   console.log("[aura/chat] request received", {
     path: req.path,
     ip: req.ip,
     hasMessage: Boolean(String(req.body?.message || "").trim()),
     historyLen: Array.isArray(req.body?.messages) ? req.body.messages.length : 0,
+    clientLang: clientLangHint || null,
   });
   try {
     const { message, messages } = req.body || {};
@@ -740,8 +751,13 @@ async function handleAuraChatRequest(req, res) {
     if (thread.length === 0) {
       const m = String(message || "").trim();
       if (!m) {
+        const Lempty = clientLangHint || "en";
+        const emptyReply =
+          Lempty === "es"
+            ? "Dígame qué necesita: reservar, horarios, servicios o cómo llegar."
+            : "Tell me what you need — booking, hours, services, or directions.";
         return res.status(200).json(
-          auraChatJson("Tell me what you need — booking, hours, services, or directions."),
+          auraChatJson(emptyReply, "NONE", { language: Lempty, replyLanguage: Lempty }),
         );
       }
       thread = [{ role: "user", content: m }];
@@ -757,7 +773,7 @@ async function handleAuraChatRequest(req, res) {
         barberLang = st?.language || "en";
         const allowFreeAuraChat = String(process.env.AURA_ALLOW_FREE_TIER_CHAT || "").trim() === "1";
         if (!barberAuraEffective(st) && !allowFreeAuraChat) {
-          const L0 = normalizeBarberLang(barberLang);
+          const L0 = resolveAuraLanguage(req, barberLang);
           const reply =
             L0 === "es"
               ? "AURA no está disponible en el plan Free. Actualiza a Pro o Elite para activar el asistente."
@@ -768,19 +784,41 @@ async function handleAuraChatRequest(req, res) {
             reply,
             action: "NONE",
             aura_available: false,
+            language: L0,
+            reply_language: L0,
           });
         }
       } catch (e) {
         console.warn("[aura/chat] barber settings:", e?.message || e);
       }
     }
-    const L = normalizeBarberLang(barberLang);
+    // Customer app preference wins; barber language is the fallback. English is always the
+    // final safety net so AURA never goes silent if the locale data is missing.
+    const L = resolveAuraLanguage(req, barberLang);
+    console.log("[aura/chat] language resolved", {
+      L,
+      clientLang: clientLangHint || null,
+      barberLang: normalizeBarberLang(barberLang),
+      userMsgPreview: String(lastUser || "").slice(0, 120),
+    });
+
+    // Per-response audit metadata for admin oversight. The mobile client treats
+    // these as opaque hints; admin tooling/logs use them to keep an English mirror.
+    const meta = {
+      language: L,
+      replyLanguage: L,
+      originalMessage: String(lastUser || "").slice(0, 8000),
+    };
 
     const kw = auraStructuredIntentFromKeywords(lastUser, L);
     if (kw.matched) {
-      console.log("[aura/chat] keyword intent:", kw.intent);
+      console.log("[aura/chat] keyword intent:", kw.intent, "lang:", L);
       if (kw.intent === "NAVIGATE_BOOK") {
-        return res.json(auraChatJson(auraChatNavigateBook(L), "NAVIGATE_BOOK"));
+        const replyEs = auraChatNavigateBook(L);
+        const replyEn = L === "en" ? replyEs : auraChatNavigateBook("en");
+        return res.json(
+          auraChatJson(replyEs, "NAVIGATE_BOOK", { ...meta, adminMessageEn: replyEn }),
+        );
       }
       if (kw.intent === "NAVIGATE_STYLES") {
         let extra = "";
@@ -796,13 +834,29 @@ async function handleAuraChatRequest(req, res) {
           console.warn("[aura/chat] style list:", e?.message || e);
         }
         const opener = L === "es" ? "Listo — abriendo estilos ahora." : "I got you — opening styles now.";
+        const styled = `${opener}${extra}${auraChatNavigateStylesSuffix(L)}`;
+        const styledEn =
+          L === "en"
+            ? styled
+            : `I got you — opening styles now.${auraChatNavigateStylesSuffix("en")}`;
         return res.json(
-          auraChatJson(`${opener}${extra}${auraChatNavigateStylesSuffix(L)}`, "NAVIGATE_STYLES"),
+          auraChatJson(styled, "NAVIGATE_STYLES", { ...meta, adminMessageEn: styledEn }),
         );
       }
       if (kw.intent === "PRICING" || kw.intent === "HOURS" || kw.intent === "DIRECTIONS" || kw.intent === "SERVICES") {
         const action = kw.intent === "PRICING" || kw.intent === "SERVICES" ? "NAVIGATE_STYLES" : "NONE";
-        return res.json(auraChatJson(kw.reply, action));
+        // Admin English mirror: re-run the same keyword intent in English so admins
+        // can read what the customer effectively saw.
+        let replyEn = kw.reply;
+        if (L !== "en") {
+          try {
+            const kwEn = auraStructuredIntentFromKeywords(lastUser, "en");
+            if (kwEn.matched && kwEn.reply) replyEn = kwEn.reply;
+          } catch (e) {
+            console.warn("[aura/chat] english mirror:", e?.message || e);
+          }
+        }
+        return res.json(auraChatJson(kw.reply, action, { ...meta, adminMessageEn: replyEn }));
       }
     }
 
@@ -814,13 +868,19 @@ async function handleAuraChatRequest(req, res) {
       wordCount <= 2 ||
       /\b(help|what can you do|options|ayuda|qu[eé] puedes hacer|opci[oó]nes)\b/i.test(cleaned)
     ) {
-      return res.json(auraChatJson(auraUnclearFallbackReply(L)));
+      const localized = auraUnclearFallbackReply(L);
+      const englishMirror = L === "en" ? localized : auraUnclearFallbackReply("en");
+      return res.json(auraChatJson(localized, "NONE", { ...meta, adminMessageEn: englishMirror }));
     }
 
     const apiKey = String(process.env.OPENAI_API_KEY || "").trim();
     if (!apiKey) {
       console.warn("[aura/chat] OPENAI_API_KEY missing — using keyword fallback");
-      return res.status(200).json(auraChatJson(auraKeywordFallbackReply(L)));
+      const localized = auraKeywordFallbackReply(L);
+      const englishMirror = L === "en" ? localized : auraKeywordFallbackReply("en");
+      return res
+        .status(200)
+        .json(auraChatJson(localized, "NONE", { ...meta, adminMessageEn: englishMirror }));
     }
 
     const model = String(process.env.OPENAI_MODEL || "gpt-4o-mini").trim();
@@ -834,16 +894,16 @@ async function handleAuraChatRequest(req, res) {
 
     const out = await auraOpenAiChat({ apiKey, model, systemPrompt: system, thread });
     const base = String(out.reply || "").trim() || auraUnclearFallbackReply(L);
-    // Add a gentle next-step suggestion (without sounding uncertain).
+    // Gentle next-step suggestion in the customer's language.
     const navigateHint =
       L === "es"
         ? "\n\nSi quiere, diga: reservar, estilos o precios — y lo llevo."
         : "\n\nIf you want, tell me: book, styles, or pricing — and I’ll take you there.";
     const reply = base + (/\b(book|booking|appointment)\b/i.test(base) ? "" : navigateHint);
-    return res.json(auraChatJson(reply));
+    return res.json(auraChatJson(reply, "NONE", meta));
   } catch (e) {
     console.error("[aura/chat] route failure:", e?.stack || e);
-    return res.status(200).json(auraChatJson(AURA_FAILSAFE_REPLY));
+    return res.status(200).json(auraChatJson(AURA_FAILSAFE_REPLY, "NONE", { language: "en", replyLanguage: "en" }));
   }
 }
 

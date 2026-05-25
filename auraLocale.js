@@ -8,6 +8,47 @@ export function normalizeBarberLang(raw) {
   return "en";
 }
 
+/**
+ * Pull the customer's app language from a chat request body / headers.
+ * Looked-at sources (in order): body.language, body.locale, body.lang,
+ * `Accept-Language` header. Returns "en" or "es", or null if not stated.
+ *
+ * @param {{ body?: any, get?: (h: string) => string | undefined, headers?: Record<string,string> }} req
+ * @returns {"en"|"es"|null}
+ */
+export function detectClientLanguage(req) {
+  const body = req && typeof req.body === "object" && req.body ? req.body : {};
+  const headerVal =
+    typeof req?.get === "function"
+      ? req.get("Accept-Language")
+      : req?.headers?.["accept-language"] || req?.headers?.["Accept-Language"];
+  const candidates = [body.language, body.locale, body.lang, headerVal];
+  for (const raw of candidates) {
+    if (!raw) continue;
+    const first = String(raw).toLowerCase().trim().split(/[,;]/)[0].trim();
+    if (!first) continue;
+    const primary = first.split("-")[0];
+    if (primary === "es") return "es";
+    if (primary === "en") return "en";
+  }
+  return null;
+}
+
+/**
+ * Resolve the language AURA should respond in for a chat request.
+ * Customer app preference (body/headers) wins. Falls back to the barber's
+ * configured language, then to English. Always returns "en" | "es".
+ *
+ * @param {object} req Express request
+ * @param {string} [barberLang] Stored barber language (existing behavior)
+ * @returns {"en"|"es"}
+ */
+export function resolveAuraLanguage(req, barberLang) {
+  const explicit = detectClientLanguage(req);
+  if (explicit) return explicit;
+  return normalizeBarberLang(barberLang);
+}
+
 /** OpenAI system add-on so chat replies match barber language. */
 export function openAiLanguageInstruction(lang) {
   return normalizeBarberLang(lang) === "es"

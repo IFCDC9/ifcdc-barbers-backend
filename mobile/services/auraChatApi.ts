@@ -23,6 +23,10 @@ export type AuraChatMessage = { role: "user" | "assistant"; content: string };
 export type AuraChatResult = {
   reply: string;
   action?: string;
+  /** Language AURA actually replied in (set by Phase 3 backend). */
+  replyLanguage?: string;
+  /** English mirror of the reply for admin oversight (Phase 3 backend). */
+  adminMessageEn?: string;
 };
 
 type AuraChatResponse = {
@@ -30,6 +34,11 @@ type AuraChatResponse = {
   message?: string;
   reply?: string;
   action?: string;
+  /** Phase 3 audit fields — optional; older deploys won't return these. */
+  language?: string;
+  reply_language?: string;
+  admin_message_en?: string;
+  original_message?: string;
 };
 
 /**
@@ -90,6 +99,14 @@ export async function sendAuraChatMessage(input: {
         return {
           reply,
           action: typeof json.action === "string" ? json.action : undefined,
+          replyLanguage:
+            typeof json.reply_language === "string"
+              ? json.reply_language
+              : typeof json.language === "string"
+                ? json.language
+                : undefined,
+          adminMessageEn:
+            typeof json.admin_message_en === "string" ? json.admin_message_en : undefined,
         };
       }
     } catch (e) {
