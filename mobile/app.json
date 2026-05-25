@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "IFCDC Barbers",
-    "slug": "ifcdc-barbers",
+    "slug": "ifcdc-barbers-backend",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -19,6 +19,7 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.ifcdc.barbers",
       "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false,
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoads": false,
           "NSExceptionDomains": {
@@ -43,6 +44,11 @@
     },
     "plugins": [
       "expo-secure-store"
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "eeba0d04-6fc7-4359-8a07-f5c0545e6a47"
+      }
+    }
   }
 }
