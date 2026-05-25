@@ -11,6 +11,7 @@ import {
 } from "react-native";
 import Constants from "expo-constants";
 import * as Google from "expo-auth-session/providers/google";
+import { useTranslation } from "react-i18next";
 import CardContainer from "../components/CardContainer";
 import GlowButton from "../components/GlowButton";
 import GoogleButton from "../components/GoogleButton";
@@ -40,6 +41,7 @@ const GOOGLE_REDIRECT_OPTIONS = {
 } as const;
 
 export default function RegisterScreen({ navigation }: { navigation: any }) {
+  const { t } = useTranslation();
   React.useEffect(() => {
     console.log("[register] API base:", BACKEND_URL, "register URL:", apiFullUrl("/api/auth/register"));
   }, []);
@@ -187,8 +189,8 @@ export default function RegisterScreen({ navigation }: { navigation: any }) {
     if (submittingRef.current) return;
     if (!acceptedTerms || !acceptedPrivacy) {
       Alert.alert(
-        "Required acceptance",
-        "Please review and accept the Terms & Conditions and the Privacy Policy to continue.",
+        t("auth.consentRequiredTitle"),
+        t("auth.consentRequiredBody"),
       );
       return;
     }
@@ -240,15 +242,15 @@ export default function RegisterScreen({ navigation }: { navigation: any }) {
       <View pointerEvents="none" style={styles.glowOrb} />
       <Text style={styles.brand}>IFCDC BARBER</Text>
       <View style={styles.brandUnderline} />
-      <Text style={styles.title}>Create account</Text>
-      <Text style={styles.tagline}>Join the IFCDC community.</Text>
+      <Text style={styles.title}>{t("auth.signUpTitle")}</Text>
+      <Text style={styles.tagline}>{t("auth.signUpTagline")}</Text>
 
       <CardContainer glow style={{ width: "100%" }}>
         {googleConfigured && request ? (
           <>
             <GoogleButton onPress={startGoogle} disabled={!request || busy} />
             <View style={{ height: 12 }} />
-            <Text style={styles.or}>or</Text>
+            <Text style={styles.or}>{t("auth.or")}</Text>
             <View style={{ height: 12 }} />
           </>
         ) : googleConfigured ? (
@@ -266,18 +268,18 @@ export default function RegisterScreen({ navigation }: { navigation: any }) {
         <TextInput
           value={fullName}
           onChangeText={setFullName}
-          placeholder="Full name"
+          placeholder={t("auth.fullName")}
           placeholderTextColor="rgba(255,255,255,0.45)"
           style={styles.input}
           editable={!busy}
         />
         <View style={{ height: 10 }} />
-        <Text style={styles.helper}>Account type</Text>
+        <Text style={styles.helper}>{t("auth.accountType")}</Text>
         <View style={{ height: 8 }} />
         <View style={styles.roleRow}>
           <View style={{ flex: 1 }}>
             <GlowButton
-              label="Customer"
+              label={t("auth.roleCustomer")}
               onPress={() => setAccountType("customer")}
               variant={accountType === "customer" ? "primary" : "outline"}
               disabled={busy}
@@ -286,7 +288,7 @@ export default function RegisterScreen({ navigation }: { navigation: any }) {
           <View style={{ width: 10 }} />
           <View style={{ flex: 1 }}>
             <GlowButton
-              label="Barber"
+              label={t("auth.roleBarber")}
               onPress={() => setAccountType("barber")}
               variant={accountType === "barber" ? "primary" : "outline"}
               disabled={busy}
@@ -295,7 +297,7 @@ export default function RegisterScreen({ navigation }: { navigation: any }) {
         </View>
         <View style={{ height: 10 }} />
         <GlowButton
-          label="Shop owner"
+          label={t("auth.roleShopOwner")}
           onPress={() => setAccountType("shop_owner")}
           variant={accountType === "shop_owner" ? "primary" : "outline"}
           disabled={busy}
@@ -304,7 +306,7 @@ export default function RegisterScreen({ navigation }: { navigation: any }) {
         <TextInput
           value={email}
           onChangeText={setEmail}
-          placeholder="Email"
+          placeholder={t("auth.email")}
           placeholderTextColor="rgba(255,255,255,0.45)"
           autoCapitalize="none"
           keyboardType="email-address"
@@ -315,7 +317,7 @@ export default function RegisterScreen({ navigation }: { navigation: any }) {
         <TextInput
           value={password}
           onChangeText={setPassword}
-          placeholder="Password (min 12: upper, lower, number, symbol)"
+          placeholder={t("auth.password")}
           placeholderTextColor="rgba(255,255,255,0.45)"
           secureTextEntry
           style={styles.input}
@@ -329,12 +331,12 @@ export default function RegisterScreen({ navigation }: { navigation: any }) {
             disabled={busy}
             required
           >
-            I agree to the{" "}
+            {t("auth.consentTermsBefore")}
             <Text
               style={styles.legalLink}
               onPress={() => navigation.navigate("TermsConditions")}
             >
-              Terms & Conditions
+              {t("auth.consentTermsLink")}
             </Text>
             .
           </ConsentRow>
@@ -345,12 +347,12 @@ export default function RegisterScreen({ navigation }: { navigation: any }) {
             disabled={busy}
             required
           >
-            I acknowledge the{" "}
+            {t("auth.consentPrivacyBefore")}
             <Text
               style={styles.legalLink}
               onPress={() => navigation.navigate("PrivacyPolicy")}
             >
-              Privacy Policy
+              {t("auth.consentPrivacyLink")}
             </Text>
             .
           </ConsentRow>
@@ -360,23 +362,22 @@ export default function RegisterScreen({ navigation }: { navigation: any }) {
             onToggle={() => setAcceptedNotifications(v => !v)}
             disabled={busy}
           >
-            Send me booking reminders and important updates by push and email.
-            (Optional — see{" "}
-            <Text
-              style={styles.legalLink}
-              onPress={() => navigation.navigate("NotificationConsent")}
-            >
-              Notification Consent
-            </Text>
-            .)
+            {t("auth.consentNotifications")}
           </ConsentRow>
-          <Text style={styles.policyVersion}>Policy version {POLICY_VERSION}</Text>
+          <Text style={styles.policyVersion}>
+            {t("auth.policyVersion", { version: POLICY_VERSION })}
+          </Text>
         </View>
         <View style={{ height: 12 }} />
-        <GlowButton label="Create account" onPress={register} disabled={busy} loading={busy} />
+        <GlowButton label={t("auth.signUpBtn")} onPress={register} disabled={busy} loading={busy} />
 
         <View style={{ height: 12 }} />
-        <GlowButton label="Back to sign in" onPress={() => navigation.navigate("Login")} variant="outline" disabled={busy} />
+        <GlowButton
+          label={t("auth.backToSignIn")}
+          onPress={() => navigation.navigate("Login")}
+          variant="outline"
+          disabled={busy}
+        />
       </CardContainer>
     </ScrollView>
   );

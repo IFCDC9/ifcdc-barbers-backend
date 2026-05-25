@@ -10,6 +10,7 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useTranslation } from "react-i18next";
 import { theme } from "../constants/theme";
 import GlowButton from "./GlowButton";
 import ProfileCard from "./ProfileCard";
@@ -24,6 +25,7 @@ type Msg = {
 /** Embedded text-only AURA chat (no modal, no voice). */
 export default function AuraChatPanel() {
   const insets = useSafeAreaInsets();
+  const { t } = useTranslation();
   const [conversationId] = useState(() => `ai-${Date.now()}`);
   const [messages, setMessages] = useState<Msg[]>([]);
   const [text, setText] = useState("");
@@ -87,8 +89,8 @@ export default function AuraChatPanel() {
           </View>
         </View>
         <View style={styles.headerText}>
-          <Text style={styles.title}>AURA</Text>
-          <Text style={styles.subtitle}>Text-only assistant — bookings, services, and shop info</Text>
+          <Text style={styles.title}>{t("aura.title")}</Text>
+          <Text style={styles.subtitle}>{t("aura.tagline")}</Text>
         </View>
       </View>
 
@@ -101,18 +103,15 @@ export default function AuraChatPanel() {
           contentContainerStyle={styles.list}
           ListEmptyComponent={
             <View style={styles.welcomeBox}>
-              <Text style={styles.welcomeTitle}>Ask AURA</Text>
-              <Text style={styles.emptyHint}>
-                AURA is here to help with bookings, services, and shop questions.
-              </Text>
-              <Text style={styles.welcomeFoot}>Type a message below — text chat only.</Text>
+              <Text style={styles.welcomeTitle}>{t("aura.title")}</Text>
+              <Text style={styles.emptyHint}>{t("aura.emptyHistory")}</Text>
             </View>
           }
           ListFooterComponent={
             sending ? (
               <View style={styles.typingRow}>
                 <ActivityIndicator size="small" color={theme.colors.gold} />
-                <Text style={styles.typingText}>AURA is composing a reply…</Text>
+                <Text style={styles.typingText}>{t("aura.sending")}</Text>
               </View>
             ) : null
           }
@@ -123,14 +122,14 @@ export default function AuraChatPanel() {
           <TextInput
             value={text}
             onChangeText={setText}
-            placeholder="Ask AURA…"
+            placeholder={t("aura.placeholder")}
             placeholderTextColor="rgba(255,255,255,0.45)"
             style={styles.input}
             editable={!sending}
             returnKeyType="send"
             onSubmitEditing={send}
           />
-          <GlowButton label="Send" onPress={send} disabled={!canSend} loading={sending} />
+          <GlowButton label={t("aura.send")} onPress={send} disabled={!canSend} loading={sending} />
         </View>
       </ProfileCard>
     </KeyboardAvoidingView>

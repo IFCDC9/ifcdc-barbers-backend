@@ -1,6 +1,7 @@
 import React from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useNavigation } from "@react-navigation/native";
+import { useTranslation } from "react-i18next";
 import ProfileScreenLayout from "../../components/ProfileScreenLayout";
 import ProfileCard from "../../components/ProfileCard";
 import {
@@ -52,31 +53,33 @@ function PolicyRow({
 
 export default function LegalPoliciesIndexScreen() {
   const navigation = useNavigation<any>();
+  const { t } = useTranslation();
   return (
     <ProfileScreenLayout
-      title="Legal & Policies"
-      subtitle="Everything that governs your account, bookings, and data"
+      title={t("legal.indexTitle")}
+      subtitle={t("legal.indexSubtitle")}
       headerTopPad={12}
     >
       <ProfileCard style={styles.headerCard}>
-        <Text style={styles.eyebrow}>Compliance</Text>
-        <Text style={styles.headerTitle}>IFCDC Barbers policy library</Text>
-        <Text style={styles.headerSub}>
-          Read each document carefully. The effective date applies to every
-          policy below.
-        </Text>
+        <Text style={styles.eyebrow}>{t("profile.menuLegal")}</Text>
+        <Text style={styles.headerTitle}>IFCDC Barbers</Text>
+        <Text style={styles.headerSub}>{t("legal.indexSubtitle")}</Text>
         <View style={styles.versionPill}>
-          <Text style={styles.versionPillText}>Effective {POLICY_VERSION}</Text>
+          <Text style={styles.versionPillText}>
+            {t("legal.policyVersionPill", { version: POLICY_VERSION })}
+          </Text>
         </View>
       </ProfileCard>
 
       <ProfileCard style={styles.listCard}>
         {LEGAL_DOC_ORDER.map((key, idx) => {
           const doc = LEGAL_DOCUMENTS[key];
+          // Use translated doc title when available, fall back to the source-of-truth English from legalContent.
+          const localizedTitle = t(`legal.doc.${doc.key}`, { defaultValue: doc.title });
           return (
             <View key={doc.key}>
               <PolicyRow
-                title={doc.title}
+                title={localizedTitle}
                 summary={doc.summary}
                 onPress={() => navigation.navigate(ROUTE_BY_DOC[doc.key])}
               />
@@ -87,11 +90,8 @@ export default function LegalPoliciesIndexScreen() {
       </ProfileCard>
 
       <ProfileCard style={styles.contactCard}>
-        <Text style={styles.contactTitle}>Need a copy on file?</Text>
-        <Text style={styles.contactBody}>
-          Email support@ifcdcbarbersapp.com from the address on your account and
-          we'll send the latest versions of every policy as a single PDF.
-        </Text>
+        <Text style={styles.contactTitle}>{t("legal.needCopy")}</Text>
+        <Text style={styles.contactBody}>{t("legal.needCopyBody")}</Text>
       </ProfileCard>
     </ProfileScreenLayout>
   );

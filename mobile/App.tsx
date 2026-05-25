@@ -12,6 +12,11 @@ import {
 } from "./services/notificationService";
 import { registerPushToken } from "./services/pushApi";
 import { AuthProvider, useAuth } from "./services/authContext";
+// i18n must be imported once so the synchronous init at module load runs
+// before any screen tries to call `t(...)`. The async `bootstrapI18n()` call
+// inside RootNav promotes the language to the user's stored choice / device
+// locale on first mount.
+import { bootstrapI18n } from "./i18n";
 import LoginScreen from "./screens/LoginScreen";
 import RegisterScreen from "./screens/RegisterScreen";
 import LegalPoliciesIndexScreen from "./screens/legal/LegalPoliciesIndexScreen";
@@ -35,6 +40,12 @@ const Stack = createStackNavigator();
 
 function RootNav() {
   const { loading, token } = useAuth();
+
+  // Promote i18n from the bundled English default to the user's stored
+  // choice or device locale. Best-effort — never blocks render.
+  React.useEffect(() => {
+    void bootstrapI18n();
+  }, []);
 
   React.useEffect(() => {
     const remove = addNotificationListeners({

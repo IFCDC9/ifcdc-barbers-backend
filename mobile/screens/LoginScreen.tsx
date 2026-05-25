@@ -1,6 +1,7 @@
 import React from "react";
 import { Alert, StyleSheet, Text, TextInput, View } from "react-native";
 import * as Google from "expo-auth-session/providers/google";
+import { useTranslation } from "react-i18next";
 import CardContainer from "../components/CardContainer";
 import GlowButton from "../components/GlowButton";
 import GoogleButton from "../components/GoogleButton";
@@ -20,6 +21,7 @@ const GOOGLE_REDIRECT_OPTIONS = {
 } as const;
 
 export default function LoginScreen({ navigation }: { navigation: any }) {
+  const { t } = useTranslation();
   React.useEffect(() => {
     console.log("[login] API base:", BACKEND_URL, "login URL:", apiFullUrl("/api/auth/login"));
   }, []);
@@ -174,15 +176,15 @@ export default function LoginScreen({ navigation }: { navigation: any }) {
       <View pointerEvents="none" style={styles.glowOrb} />
       <Text style={styles.brand}>IFCDC BARBER</Text>
       <View style={styles.brandUnderline} />
-      <Text style={styles.title}>Sign in</Text>
-      <Text style={styles.tagline}>Premium grooming. Frictionless booking.</Text>
+      <Text style={styles.title}>{t("auth.signInTitle")}</Text>
+      <Text style={styles.tagline}>{t("auth.signInTagline")}</Text>
 
       <CardContainer glow style={{ width: "100%" }}>
         {googleConfigured && request ? (
           <>
             <GoogleButton onPress={startGoogle} disabled={!request || busy} />
             <View style={{ height: 12 }} />
-            <Text style={styles.or}>or</Text>
+            <Text style={styles.or}>{t("auth.or")}</Text>
             <View style={{ height: 12 }} />
           </>
         ) : googleConfigured ? (
@@ -200,7 +202,7 @@ export default function LoginScreen({ navigation }: { navigation: any }) {
         <TextInput
           value={email}
           onChangeText={setEmail}
-          placeholder="Email"
+          placeholder={t("auth.email")}
           placeholderTextColor="rgba(255,255,255,0.45)"
           autoCapitalize="none"
           keyboardType="email-address"
@@ -211,17 +213,22 @@ export default function LoginScreen({ navigation }: { navigation: any }) {
         <TextInput
           value={password}
           onChangeText={setPassword}
-          placeholder="Password"
+          placeholder={t("auth.password")}
           placeholderTextColor="rgba(255,255,255,0.45)"
           secureTextEntry
           style={styles.input}
           editable={!busy}
         />
         <View style={{ height: 12 }} />
-        <GlowButton label="Sign in" onPress={login} disabled={busy} loading={busy} />
+        <GlowButton label={t("auth.signInBtn")} onPress={login} disabled={busy} loading={busy} />
 
         <View style={{ height: 12 }} />
-        <GlowButton label="Create account" onPress={() => navigation.navigate("Register")} variant="outline" disabled={busy} />
+        <GlowButton
+          label={t("auth.signUpBtn")}
+          onPress={() => navigation.navigate("Register")}
+          variant="outline"
+          disabled={busy}
+        />
       </CardContainer>
     </View>
   );

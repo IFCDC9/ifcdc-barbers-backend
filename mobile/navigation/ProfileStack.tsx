@@ -7,6 +7,7 @@ import BookingDetailScreen from "../screens/profile/BookingDetailScreen";
 import CancelBookingScreen from "../screens/profile/CancelBookingScreen";
 import RescheduleBookingScreen from "../screens/profile/RescheduleBookingScreen";
 import NotificationsScreen from "../screens/profile/NotificationsScreen";
+import LanguageSettingsScreen from "../screens/profile/LanguageSettingsScreen";
 import SupportHelpScreen from "../screens/profile/SupportHelpScreen";
 import TermsPrivacyScreen from "../screens/profile/TermsPrivacyScreen";
 import LegalPoliciesIndexScreen from "../screens/legal/LegalPoliciesIndexScreen";
@@ -43,6 +44,7 @@ export type ProfileStackParamList = {
   CancelBooking: { bookingId: string };
   RescheduleBooking: { bookingId: string };
   Notifications: undefined;
+  LanguageSettings: undefined;
   SupportHelp: undefined;
   TermsPrivacy: undefined;
   LegalPolicies: undefined;
@@ -81,6 +83,7 @@ export default function ProfileStack() {
       <Stack.Screen name="CancelBooking" component={CancelBookingScreen} />
       <Stack.Screen name="RescheduleBooking" component={RescheduleBookingScreen} />
       <Stack.Screen name="Notifications" component={NotificationsScreen} />
+      <Stack.Screen name="LanguageSettings" component={LanguageSettingsScreen} />
       {PAYMENT_STACK_SCREENS.map(({ name, component }) => (
         <Stack.Screen key={name} name={name} component={component} />
       ))}

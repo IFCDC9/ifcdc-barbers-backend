@@ -4,6 +4,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useNavigation } from "@react-navigation/native";
 import type { StackNavigationProp } from "@react-navigation/stack";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useTranslation } from "react-i18next";
 import { useAuth } from "../../services/authContext";
 import { canManageSchedules } from "../../utils/scheduleAccess";
 import { canManageShops } from "../../utils/shopAccess";
@@ -31,6 +32,7 @@ export default function ProfileHomeScreen() {
   const { user, loading, signOut, token } = useAuth();
   const insets = useSafeAreaInsets();
   const bottomPad = profileHomeBottomPad(insets.bottom);
+  const { t } = useTranslation();
 
   const [localAvatar, setLocalAvatar] = useState<string | null>(null);
 
@@ -42,13 +44,13 @@ export default function ProfileHomeScreen() {
   }, [user?.id]);
 
   const displayName = loading ? "…" : user?.name || "IFCDC Member";
-  const displayEmail = loading ? "Loading…" : user?.email || "—";
+  const displayEmail = loading ? t("common.loading") : user?.email || "—";
   const avatarLetters = initialsFrom(user?.name || "", user?.email || "");
   const avatarUri = localAvatar || user?.profileImageUrl || null;
 
   const menu: { key: keyof ProfileStackParamList; label: string }[] = [
-    { key: "EditProfile", label: "Edit Profile" },
-    { key: "BookingHistory", label: "Booking History" },
+    { key: "EditProfile", label: t("profile.menuPersonalInfo") },
+    { key: "BookingHistory", label: t("profile.menuBookings") },
     ...(canManageShops(user, token)
       ? [{ key: "ShopRoster" as const, label: "Platform Shops" }]
       : []),
@@ -61,10 +63,11 @@ export default function ProfileHomeScreen() {
     ...(canAccessUserManagement(user, token)
       ? [{ key: "ViewAllUsers" as const, label: "User Management" }]
       : []),
-    { key: "Notifications", label: "Notifications" },
-    { key: "PaymentMethods", label: "Payment Methods" },
-    { key: "SupportHelp", label: "Support / Help" },
-    { key: "LegalPolicies", label: "Legal & Policies" },
+    { key: "Notifications", label: t("profile.menuNotifications") },
+    { key: "PaymentMethods", label: t("profile.menuPaymentMethods") },
+    { key: "LanguageSettings", label: t("profile.menuLanguage") },
+    { key: "SupportHelp", label: t("profile.menuSupport") },
+    { key: "LegalPolicies", label: t("profile.menuLegal") },
   ];
 
   return (
@@ -75,8 +78,8 @@ export default function ProfileHomeScreen() {
         contentContainerStyle={[styles.content, { paddingBottom: bottomPad }]}
         showsVerticalScrollIndicator={false}
       >
-        <Text style={styles.screenTitle}>Profile</Text>
-        <Text style={styles.screenSub}>Your account</Text>
+        <Text style={styles.screenTitle}>{t("profile.title")}</Text>
+        <Text style={styles.screenSub}>{t("profile.settingsHeader")}</Text>
 
         <ProfileCard style={styles.headerCard}>
           {avatarUri ? (
@@ -112,12 +115,16 @@ export default function ProfileHomeScreen() {
 
         <ProfileCard style={styles.signOutCard}>
           <GlowButton
-            label="Sign Out"
+            label={t("profile.menuSignOut")}
             variant="outline"
             onPress={() => {
-              Alert.alert("Sign out?", "You can sign back in anytime.", [
-                { text: "Cancel", style: "cancel" },
-                { text: "Sign Out", style: "destructive", onPress: () => signOut() },
+              Alert.alert(t("profile.signOutConfirmTitle"), t("profile.signOutConfirmBody"), [
+                { text: t("common.cancel"), style: "cancel" },
+                {
+                  text: t("profile.menuSignOut"),
+                  style: "destructive",
+                  onPress: () => signOut(),
+                },
               ]);
             }}
           />

@@ -3,6 +3,7 @@ import { StyleSheet, View } from "react-native";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
+import { useTranslation } from "react-i18next";
 import ExploreScreen from "./(tabs)/explore";
 import ProfileScreen from "./(tabs)/profile";
 import BookingScreen from "../screens/BookingScreen";
@@ -78,6 +79,7 @@ const tabIconStyles = StyleSheet.create({
 const Tabs = () => {
   const { isPlatformAdmin } = useAuth();
   const insets = useSafeAreaInsets();
+  const { t } = useTranslation();
   const tabBarHeight = 60 + Math.max(insets.bottom, 8);
 
   return (
@@ -114,7 +116,7 @@ const Tabs = () => {
           name="Home"
           component={ExploreScreen}
           options={{
-            tabBarLabel: "Home",
+            tabBarLabel: t("tabs.home"),
             tabBarIcon: ({ focused }) => (
               <TabIcon name={focused ? "home" : "home-outline"} focused={focused} />
             ),
@@ -125,7 +127,7 @@ const Tabs = () => {
           name="Book"
           component={BookingScreen}
           options={{
-            tabBarLabel: "Book",
+            tabBarLabel: t("tabs.book"),
             tabBarIcon: ({ focused }) => (
               <TabIcon name={focused ? "calendar" : "calendar-outline"} focused={focused} />
             ),
@@ -136,7 +138,7 @@ const Tabs = () => {
           name="Appointments"
           component={AppointmentsScreen}
           options={{
-            tabBarLabel: "Appointments",
+            tabBarLabel: t("tabs.appointments"),
             tabBarIcon: ({ focused }) => (
               <TabIcon name={focused ? "list" : "list-outline"} focused={focused} />
             ),
@@ -147,7 +149,7 @@ const Tabs = () => {
           name="AURA"
           component={AuraScreen}
           options={{
-            tabBarLabel: "AURA",
+            tabBarLabel: t("tabs.aura"),
             tabBarIcon: ({ focused }) => (
               <TabIcon
                 name={focused ? "sparkles" : "sparkles-outline"}
@@ -161,7 +163,7 @@ const Tabs = () => {
           name="Profile"
           component={ProfileScreen}
           options={{
-            tabBarLabel: "Profile",
+            tabBarLabel: t("tabs.profile"),
             tabBarIcon: ({ focused }) => (
               <TabIcon name={focused ? "person" : "person-outline"} focused={focused} />
             ),
