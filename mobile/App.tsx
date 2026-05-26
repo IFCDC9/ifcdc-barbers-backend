@@ -1,6 +1,6 @@
 import React from "react";
 import * as WebBrowser from "expo-web-browser";
-import { LogBox, View } from "react-native";
+import { LogBox, Platform, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
 import { NavigationContainer } from "@react-navigation/native";
@@ -37,6 +37,80 @@ LogBox.ignoreLogs([
 ]);
 
 const Stack = createStackNavigator();
+
+/**
+ * Startup error boundary. Replaces the silent iOS white-screen crash with a
+ * readable error so TestFlight testers (and Sentry-less production builds) can
+ * tell us what blew up before the navigation tree mounted. Class component is
+ * required because `componentDidCatch` / `getDerivedStateFromError` only run on
+ * class components in React.
+ */
+type StartupErrorBoundaryState = { error: Error | null };
+
+class StartupErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  StartupErrorBoundaryState
+> {
+  state: StartupErrorBoundaryState = { error: null };
+
+  static getDerivedStateFromError(error: Error): StartupErrorBoundaryState {
+    return { error };
+  }
+
+  componentDidCatch(error: Error, info: React.ErrorInfo) {
+    // Surface to native logs so `xcrun simctl spawn ... log stream` and TestFlight crash logs
+    // capture the real stack instead of an opaque white screen.
+    console.error("[startup] fatal error before mount:", error?.message, info?.componentStack);
+  }
+
+  render() {
+    const { error } = this.state;
+    if (!error) return this.props.children;
+    return (
+      <View style={errorStyles.root}>
+        <ScrollView contentContainerStyle={errorStyles.scroll}>
+          <Text style={errorStyles.title}>IFCDC Barbers couldn't start</Text>
+          <Text style={errorStyles.subtitle}>
+            Something failed before the app could load. Show this to support so we can fix it.
+          </Text>
+          <Text style={errorStyles.label}>Error</Text>
+          <Text style={errorStyles.body} selectable>
+            {error?.message || String(error)}
+          </Text>
+          {error?.stack ? (
+            <>
+              <Text style={errorStyles.label}>Stack</Text>
+              <Text style={errorStyles.body} selectable>
+                {error.stack}
+              </Text>
+            </>
+          ) : null}
+          <Text style={errorStyles.label}>Platform</Text>
+          <Text style={errorStyles.body} selectable>
+            {Platform.OS} {Platform.Version}
+          </Text>
+        </ScrollView>
+      </View>
+    );
+  }
+}
+
+const errorStyles = StyleSheet.create({
+  root: { flex: 1, backgroundColor: "#0b0b0b" },
+  scroll: { padding: 24, paddingTop: 72 },
+  title: { color: "#F5C842", fontSize: 22, fontWeight: "800", marginBottom: 8 },
+  subtitle: { color: "#ddd", fontSize: 14, marginBottom: 20, lineHeight: 20 },
+  label: {
+    color: "#F5C842",
+    fontSize: 12,
+    fontWeight: "700",
+    letterSpacing: 1.2,
+    marginTop: 16,
+    marginBottom: 4,
+    textTransform: "uppercase",
+  },
+  body: { color: "#fff", fontSize: 13, lineHeight: 19 },
+});
 
 function RootNav() {
   const { loading, token } = useAuth();
@@ -118,11 +192,13 @@ function RootNav() {
 
 export default function App() {
   return (
-    <SafeAreaProvider>
-      <AuthProvider>
-        <RootNav />
-      </AuthProvider>
-    </SafeAreaProvider>
+    <StartupErrorBoundary>
+      <SafeAreaProvider>
+        <AuthProvider>
+          <RootNav />
+        </AuthProvider>
+      </SafeAreaProvider>
+    </StartupErrorBoundary>
   );
 }
 
