@@ -16,7 +16,7 @@ import { AuthProvider, useAuth } from "./services/authContext";
 // before any screen tries to call `t(...)`. The async `bootstrapI18n()` call
 // inside RootNav promotes the language to the user's stored choice / device
 // locale on first mount.
-import { bootstrapI18n } from "./i18n";
+import { bootstrapI18n, currentLanguage } from "./i18n";
 import LoginScreen from "./screens/LoginScreen";
 import RegisterScreen from "./screens/RegisterScreen";
 import LegalPoliciesIndexScreen from "./screens/legal/LegalPoliciesIndexScreen";
@@ -37,6 +37,21 @@ LogBox.ignoreLogs([
 ]);
 
 const Stack = createStackNavigator();
+
+/**
+ * Build 20 only: visible diagnostic overlay so we can see, on a real TestFlight
+ * device, why the dark loading screen was sticking. Flip to `false` once Build
+ * 20 confirms the real app reaches LoginScreen, and ship the cleanup as Build 21.
+ */
+const SHOW_STARTUP_DIAG = true;
+const APP_BUILD_LABEL = "v1.0.0 b20";
+
+console.log("[startup] App.tsx module loaded", {
+  buildLabel: APP_BUILD_LABEL,
+  platform: Platform.OS,
+  version: String(Platform.Version),
+  ts: new Date().toISOString(),
+});
 
 /**
  * Startup error boundary. Replaces the silent iOS white-screen crash with a
@@ -112,14 +127,67 @@ const errorStyles = StyleSheet.create({
   body: { color: "#fff", fontSize: 13, lineHeight: 19 },
 });
 
+/**
+ * Floating, non-interactive diagnostic banner. Pinned under the iOS status bar
+ * so it cannot be hidden by a stuck overlay or empty navigator. Intentionally
+ * cheap to render — no async work, no hooks beyond `useAuth` / `currentLanguage`.
+ */
+function StartupDiag({
+  loading,
+  token,
+}: {
+  loading: boolean;
+  token: string | null;
+}) {
+  if (!SHOW_STARTUP_DIAG) return null;
+  const lang = currentLanguage();
+  return (
+    <View style={diagStyles.banner} pointerEvents="none">
+      <Text style={diagStyles.text} numberOfLines={1}>
+        IFCDC {APP_BUILD_LABEL} · {Platform.OS} {String(Platform.Version)} · lang={lang}
+      </Text>
+      <Text style={diagStyles.text} numberOfLines={1}>
+        loading={String(loading)} · token={token ? "yes" : "no"}
+      </Text>
+    </View>
+  );
+}
+
+const diagStyles = StyleSheet.create({
+  banner: {
+    position: "absolute",
+    top: 44,
+    left: 8,
+    right: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    backgroundColor: "rgba(0,0,0,0.55)",
+    borderColor: "rgba(245,200,66,0.55)",
+    borderWidth: 1,
+    borderRadius: 8,
+    zIndex: 9999,
+    elevation: 9999,
+  },
+  text: { color: "#F5C842", fontSize: 11, fontWeight: "600", letterSpacing: 0.3 },
+});
+
 function RootNav() {
   const { loading, token } = useAuth();
 
-  // Promote i18n from the bundled English default to the user's stored
-  // choice or device locale. Best-effort — never blocks render.
   React.useEffect(() => {
-    void bootstrapI18n();
+    console.log("[startup] RootNav mounted", { initialLoading: loading });
+    void bootstrapI18n()
+      .then((lang) => console.log("[startup] i18n bootstrap done", { lang }))
+      .catch((e) => console.warn("[startup] i18n bootstrap failed (ignored):", String(e)));
   }, []);
+
+  React.useEffect(() => {
+    console.log("[startup] auth state", {
+      loading,
+      hasToken: Boolean(token),
+      ts: new Date().toISOString(),
+    });
+  }, [loading, token]);
 
   React.useEffect(() => {
     const remove = addNotificationListeners({
@@ -156,13 +224,17 @@ function RootNav() {
     };
   }, [token]);
 
-  if (loading) {
-    return <View style={{ flex: 1, backgroundColor: "#050505" }} />;
-  }
-
+  // Build 20: do NOT gate render on `loading`. The previous dark-screen gate
+  // (#050505 fullscreen view) hid the app whenever SecureStore or /auth/me was
+  // slow on a fresh install. Render the navigator immediately — when no token
+  // is present (the default during refresh), the user lands on LoginScreen
+  // right away and can interact. When refresh() later resolves with a real
+  // token, React Navigation rebuilds the stack and switches to the App tabs.
   return (
-    <View style={{ flex: 1 }}>
-      <NavigationContainer>
+    <View style={{ flex: 1, backgroundColor: "#050505" }}>
+      <NavigationContainer
+        onReady={() => console.log("[startup] NavigationContainer ready")}
+      >
         <Stack.Navigator
           screenOptions={{ headerShown: false }}
           initialRouteName={token ? "App" : "Login"}
@@ -186,6 +258,7 @@ function RootNav() {
           )}
         </Stack.Navigator>
       </NavigationContainer>
+      <StartupDiag loading={loading} token={token} />
     </View>
   );
 }
