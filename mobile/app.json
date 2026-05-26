@@ -20,6 +20,7 @@
       "bundleIdentifier": "com.ifcdc.barbers",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
+        "NSSpeechRecognitionUsageDescription": "IFCDC Barbers uses speech recognition so AURA can understand voice booking requests when you choose to talk to it.",
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoads": false,
           "NSExceptionDomains": {
