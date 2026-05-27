@@ -25,6 +25,9 @@ export type BookingRow = {
   payment_status?: string;
   booking_status?: string;
   total_amount?: number | string;
+  amount_paid?: number | string;
+  balance_due?: number | string;
+  remaining_balance?: number | string;
   platform_fee?: number | string;
   created_at?: string;
 };

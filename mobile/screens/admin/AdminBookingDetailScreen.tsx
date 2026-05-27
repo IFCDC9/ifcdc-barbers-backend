@@ -51,13 +51,17 @@ function MetaRow({ label, value }: { label: string; value: string }) {
 function paymentSummary(booking: AdminBookingDetail): string {
   const type = String(booking.payment_type || "full").replace(/_/g, " ");
   const deposit = Number(booking.deposit_amount);
-  const paid = Number(booking.amount_paid ?? booking.total_paid);
-  const remaining = Number(booking.remaining_balance);
+  const paid = Number(booking.amount_charged ?? booking.amount_paid ?? booking.total_paid);
+  const balance =
+    Number(booking.balance_due ?? booking.remaining_balance ?? 0);
+  const platformFee = Number(booking.platform_fee);
+  const payout = Number(booking.barber_payout_amount);
+  const feeStatus = String(booking.platform_fee_status || "pending").replace(/_/g, " ");
   if (type.includes("deposit") && Number.isFinite(deposit) && deposit > 0) {
-    const rem = Number.isFinite(remaining) ? ` · Balance ${formatMoney(remaining)}` : "";
-    return `Deposit ${formatMoney(deposit)} · Paid ${formatMoney(paid)}${rem}`;
+    const rem = balance > 0.01 ? ` · Balance due ${formatMoney(balance)}` : "";
+    return `Deposit ${formatMoney(deposit)} · Charged ${formatMoney(paid)}${rem} · Platform fee ${formatMoney(platformFee)} (${feeStatus}) · Barber payout ${formatMoney(payout)}`;
   }
-  return `Full payment · ${formatMoney(paid || booking.total_amount || booking.total_price)}`;
+  return `Paid in full · Charged ${formatMoney(paid || booking.total_amount || booking.total_price)} · Platform fee ${formatMoney(platformFee)} (${feeStatus}) · Barber payout ${formatMoney(payout)}`;
 }
 
 export default function AdminBookingDetailScreen() {
@@ -226,6 +230,14 @@ export default function AdminBookingDetailScreen() {
             (booking as { payment_method?: string }).payment_method,
             booking.payment_provider,
           )}
+        />
+        <MetaRow
+          label="Barber payout"
+          value={formatMoney(booking.barber_payout_amount)}
+        />
+        <MetaRow
+          label="Platform fee status"
+          value={String(booking.platform_fee_status || "pending").replace(/_/g, " ")}
         />
         <MetaRow label="Summary" value={paymentSummary(booking)} />
         <MetaRow label="Provider" value={booking.payment_provider || "—"} />

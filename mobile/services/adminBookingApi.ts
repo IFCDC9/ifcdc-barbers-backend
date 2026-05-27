@@ -4,9 +4,14 @@ import { userFacingApiError } from "../utils/userFacingApiError";
 
 export type AdminBookingDetail = BookingRow & {
   phone?: string | null;
+  service_price?: number | string | null;
   deposit_amount?: number | string | null;
   amount_paid?: number | string | null;
+  amount_charged?: number | string | null;
+  balance_due?: number | string | null;
   remaining_balance?: number | string | null;
+  barber_payout_amount?: number | string | null;
+  platform_fee_status?: string | null;
   payment_type?: string | null;
   payment_method?: string | null;
   payment_status?: string | null;

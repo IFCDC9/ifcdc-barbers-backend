@@ -451,10 +451,10 @@ export function createBookingsRouter({ sendBookingEmail, sendBookingPush, requir
     const r = await dbQuery(
       `SELECT id, user_id, customer_name, customer_email, barber_name, barber_id, business_id, client_id, service, date, time,
               phone,
-              amount, total_price, deposit_amount, amount_paid, remaining_balance,
+              amount, service_price, total_price, deposit_amount, amount_paid, amount_charged, balance_due, remaining_balance,
               payment_type, payment_status, payment_method, payment_provider, paypal_order_id, paypal_capture_id,
               style_id, style_title, style_image_url, tip_amount, total_paid,
-              platform_fee, total_amount, booking_status, is_paid_booking, created_at
+              platform_fee, platform_fee_status, barber_payout_amount, total_amount, booking_status, is_paid_booking, created_at
        FROM bookings
        ${tenantWhere}
        ORDER BY created_at DESC
@@ -470,7 +470,7 @@ export function createBookingsRouter({ sendBookingEmail, sendBookingPush, requir
               b.amount, b.service_price, b.total_price, b.deposit_amount, b.amount_paid, b.amount_charged, b.balance_due, b.remaining_balance,
               b.payment_type, b.payment_status, b.payment_method, b.payment_provider, b.paypal_order_id, b.paypal_capture_id,
               b.style_id, b.style_title, b.style_image_url, b.tip_amount, b.total_paid,
-              b.platform_fee, b.total_amount, b.booking_status, b.is_paid_booking,
+              b.platform_fee, b.platform_fee_status, b.barber_payout_amount, b.total_amount, b.booking_status, b.is_paid_booking,
               b.notes, b.cancelled_at, b.cancelled_by, b.created_at,
               biz.name AS shop_name
        FROM bookings b

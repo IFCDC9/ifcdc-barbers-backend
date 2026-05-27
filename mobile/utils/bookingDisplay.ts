@@ -72,10 +72,14 @@ export function paymentStatusHeadline(
   if (status === "payment_failed") return "PAYMENT FAILED";
   if (status === "unpaid" || status === "pending") return "PAYMENT NOT COMPLETED";
   if (status === "paid_full") return "PAID IN FULL";
-  if (status === "deposit_paid") return "DEPOSIT PAID";
+  if (status === "deposit_paid") {
+    const remaining = Number(remainingBalance);
+    if (Number.isFinite(remaining) && remaining > 0.01) return "DEPOSIT PAID · BALANCE DUE";
+    return "DEPOSIT PAID";
+  }
   const kind = resolvePaymentDisplayKind(paymentStatus, remainingBalance, amountPaid);
   if (kind === "paid_full") return "PAID IN FULL";
-  if (kind === "balance_due") return "DEPOSIT PAID";
+  if (kind === "balance_due") return "DEPOSIT PAID · BALANCE DUE";
   if (kind === "unpaid") return "PAYMENT NOT COMPLETED";
   if (kind === "failed") return "PAYMENT FAILED";
   return String(paymentStatus || "PENDING")
