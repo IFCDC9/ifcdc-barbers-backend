@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   View,
   Text,
@@ -109,37 +109,45 @@ function BookingScreen() {
     return subscribeScheduleUpdated(() => setScheduleRefreshKey((k) => k + 1));
   }, []);
 
+  const loadBarbers = useCallback(async () => {
+    setBarbersLoading(true);
+    setBarbersError(null);
+    try {
+      const list = await fetchBarbersList();
+      const items = list
+        .filter((b) => b && b.active !== false)
+        .map((b) => ({ id: b.id, name: String(b.name || '').trim() }))
+        .filter((b) => b.name);
+      setBarbers(items);
+      setBarbersError(items.length ? null : t('booking.noBarbers'));
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.warn('[booking] fetch barbers failed:', msg, e?.url);
+      setBarbers([]);
+      setBarbersError(t('booking.loadBarbersError'));
+      reportConnectionFailure({
+        kind: 'network',
+        url: e?.url,
+        message: msg,
+      });
+    } finally {
+      setBarbersLoading(false);
+    }
+  }, [t]);
+
   useEffect(() => {
     let alive = true;
     (async () => {
       try {
-        const list = await fetchBarbersList();
-        if (!alive) return;
-        const items = list
-          .filter((b) => b && b.active !== false)
-          .map((b) => ({ id: b.id, name: String(b.name || '').trim() }))
-          .filter((b) => b.name);
-        setBarbers(items);
-        setBarbersError(items.length ? null : t('booking.noBarbers'));
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        console.warn('[booking] fetch barbers failed:', msg, e?.url);
-        if (!alive) return;
-        setBarbers([]);
-        setBarbersError(t('booking.loadBarbersError'));
-        reportConnectionFailure({
-          kind: 'network',
-          url: e?.url,
-          message: msg,
-        });
+        await loadBarbers();
       } finally {
-        if (alive) setBarbersLoading(false);
+        if (!alive) return;
       }
     })();
     return () => {
       alive = false;
     };
-  }, []);
+  }, [loadBarbers]);
 
   useEffect(() => {
     if (step !== 5) return;
@@ -524,7 +532,27 @@ function BookingScreen() {
               </View>
             ) : null}
             {barbersError ? (
-              <Text style={{ color: '#f88', marginBottom: 12 }}>{barbersError}</Text>
+              <View style={styles.barbersErrorBox}>
+                <Text style={styles.barbersErrorText}>{barbersError}</Text>
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  accessibilityLabel={t('common.retry') || 'Try again'}
+                  onPress={() => {
+                    console.log('[booking] retry barbers tapped');
+                    loadBarbers();
+                  }}
+                  style={styles.barbersRetryBtn}
+                  disabled={barbersLoading}
+                >
+                  {barbersLoading ? (
+                    <ActivityIndicator color="#0b0b0b" />
+                  ) : (
+                    <Text style={styles.barbersRetryLabel}>
+                      {t('common.retry') || 'Try again'}
+                    </Text>
+                  )}
+                </TouchableOpacity>
+              </View>
             ) : null}
             {barbers.map((b) => (
               <TouchableOpacity
@@ -757,6 +785,36 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     borderWidth: 1,
     borderColor: 'rgba(245,200,66,0.2)',
+  },
+  barbersErrorBox: {
+    marginBottom: 14,
+    padding: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(245,200,66,0.32)',
+    backgroundColor: 'rgba(255,255,255,0.04)',
+  },
+  barbersErrorText: {
+    color: '#f88',
+    fontSize: 13,
+    lineHeight: 18,
+    marginBottom: 12,
+  },
+  barbersRetryBtn: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: 22,
+    paddingVertical: 10,
+    borderRadius: 999,
+    backgroundColor: '#F5C842',
+    minWidth: 120,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  barbersRetryLabel: {
+    color: '#0b0b0b',
+    fontSize: 13,
+    fontWeight: '800',
+    letterSpacing: 0.4,
   },
   summaryCard: {
     backgroundColor: '#111',

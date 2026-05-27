@@ -335,13 +335,40 @@ export async function fetchOccupiedSlots({ barberName, dateLabel }) {
 
 /**
  * GET /api/app-bookings/barbers — Postgres bookable barbers (checkout source of truth).
+ *
+ * Logs every step of the request lifecycle in a stable format so TestFlight
+ * console output is greppable for support diagnostics:
+ *   BOOKING API: <url>
+ *   BOOKING RESPONSE: <status>
+ *   BOOKING DATA: <body summary>
  */
 export async function fetchBarbersList() {
   logApiEnvOnce();
   const url = apiFullUrl("/api/app-bookings/barbers");
+  console.log("BOOKING API:", url);
   console.log("[IFCDC] BARBERS GET:", url);
-  const res = await bookingFetch(url, { headers: { Accept: "application/json" } });
+  let res;
+  try {
+    res = await bookingFetch(url, { headers: { Accept: "application/json" } });
+  } catch (e) {
+    const isTimeout = e instanceof Error && e.name === "AbortError";
+    const message = e instanceof Error ? e.message : String(e);
+    console.warn("BOOKING RESPONSE: network", { url, error: message, timeout: isTimeout });
+    const err = new Error(isTimeout ? "Request timed out" : `Network error: ${message}`);
+    err.status = isTimeout ? "timeout" : "network";
+    err.url = url;
+    throw err;
+  }
+  console.log("BOOKING RESPONSE:", res.status);
   const json = await parseJson(res);
+  console.log(
+    "BOOKING DATA:",
+    Array.isArray(json)
+      ? `array(${json.length})`
+      : json && typeof json === "object"
+        ? Object.keys(json).join(",")
+        : String(json),
+  );
   if (!res.ok) {
     const err = new Error(json.message || json.error || `HTTP ${res.status}`);
     err.status = res.status;
