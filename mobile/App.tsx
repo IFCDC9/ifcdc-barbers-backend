@@ -1,69 +1,184 @@
 /**
- * IFCDC Barbers — BUILD 21 EMERGENCY FALLBACK SMOKE TEST.
+ * IFCDC Barbers — BUILD 22 lazy-mount root.
  *
- * Build 18 (white screen) was fixed by removing the stale App.js / index.js
- * entry. Build 19 was a duplicate of the old IPA. Build 20 stayed dark
- * because the dark loading gate hid the real navigator. Build 20 ALSO did
- * not show the gold diagnostic banner that was added at the root of the
- * provider tree — which proves React itself never mounted, i.e. a top-level
- * import or side-effect inside the previous App.tsx (AuthProvider, i18n
- * synchronous init, expo-auth-session, expo-notifications, the legal-screen
- * chain, the Tabs layout, etc.) is throwing at module-load time. The
- * StartupErrorBoundary cannot catch module-load errors — it only catches
- * errors during render — so the user only ever sees a black surface.
+ * Build 21 proved the entry chain (AppEntry.js → App.tsx) is healthy by
+ * rendering only `react` + `react-native` core. Build 22 adds back the
+ * real provider tree (SafeAreaProvider, AuthProvider, NavigationContainer,
+ * Login, Register, Password Reset, Dashboard shell) — but does so by
+ * lazily `require()`-ing AppRoot.tsx inside try/catch. If any heavy import
+ * in AppRoot's transitive chain throws at module-load time (the suspected
+ * cause of the Build 18-20 black screens — boundaries cannot catch
+ * module-load errors, only render errors), App.tsx catches it and renders
+ * "System Recovery Mode" with the actual error, instead of a silent
+ * black surface.
  *
- * This file is intentionally the ABSOLUTE MINIMUM React app on purpose:
- *   - Only `react` and `react-native` core imports. Nothing else.
- *   - No SafeAreaProvider, no NavigationContainer, no Stack/Tabs, no auth
- *     context, no i18n, no notifications, no Google auth, no legal screens.
- *   - No async work, no useEffect, no state — just static JSX.
- *
- * If Build 21 displays "IFCDC ROOT LOADED BUILD 21" on a fresh TestFlight
- * install, we've proven: (a) the native shell is healthy, (b) the JS bundle
- * loads, (c) React mounts, (d) the entry chain (AppEntry.js → App.tsx) is
- * intact. The next builds will then progressively re-add real layers
- * (SafeAreaProvider → AuthProvider → i18n → LoginScreen → ...) until the
- * crashing import is identified.
- *
- * If Build 21 STILL shows a black screen on a fresh install, the problem is
- * below JavaScript (cached IPA on the device, wrong artifact uploaded to
- * Apple, native module misconfiguration). The handoff doc tells you how to
- * confirm device cache vs. real ship issue.
+ * Architectural rules for Build 22 (do NOT regress):
+ *   - This file imports ONLY `react` and `react-native` core. Anything
+ *     heavier goes in AppRoot.tsx so it can be safely lazy-loaded.
+ *   - The first paint is "IFCDC ROOT LOADED" — same as Build 21, so even
+ *     if AppRoot fails to evaluate, the user sees branded text immediately.
+ *   - Recovery Mode shows the failed stage + error message + stack so
+ *     TestFlight testers can read it back to support.
  */
 
 import React from "react";
-import { Platform, StyleSheet, Text, View } from "react-native";
+import {
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 
-const BUILD_LABEL = "BUILD 21";
+const BUILD_LABEL = "BUILD 22";
 
-console.log("[startup] App.tsx (minimal) module loaded", {
+console.log("[startup] ROOT START", {
   buildLabel: BUILD_LABEL,
   platform: Platform.OS,
   version: String(Platform.Version),
   ts: new Date().toISOString(),
 });
 
+type Phase =
+  | { kind: "boot" }
+  | { kind: "ready"; AppRoot: React.ComponentType }
+  | { kind: "recovery"; stage: string; error: string };
+
+type TopBoundaryProps = {
+  children: React.ReactNode;
+  onError: (error: Error) => void;
+};
+
+class TopBoundary extends React.Component<TopBoundaryProps, { error: Error | null }> {
+  state: { error: Error | null } = { error: null };
+
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+
+  componentDidCatch(error: Error, info: React.ErrorInfo) {
+    console.error(
+      "[startup] TopBoundary caught render error:",
+      error?.message,
+      info?.componentStack,
+    );
+    this.props.onError(error);
+  }
+
+  render() {
+    if (this.state.error) return null;
+    return this.props.children;
+  }
+}
+
 export default function App() {
-  console.log("[startup] App() render");
+  const [phase, setPhase] = React.useState<Phase>({ kind: "boot" });
+
+  React.useEffect(() => {
+    let cancelled = false;
+    // Defer the heavy require by one tick so the ROOT START frame paints
+    // first — gives TestFlight users immediate feedback even on slow devices,
+    // and lets Hermes finish JS init before we add load.
+    const timer = setTimeout(() => {
+      if (cancelled) return;
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const mod = require("./AppRoot");
+        const Component: React.ComponentType = mod?.default ?? mod;
+        if (typeof Component !== "function") {
+          throw new Error("AppRoot: default export is not a React component");
+        }
+        console.log("[startup] AppRoot module evaluated successfully");
+        setPhase({ kind: "ready", AppRoot: Component });
+      } catch (e: unknown) {
+        const message = e instanceof Error ? e.message : String(e);
+        const stack = e instanceof Error && e.stack ? e.stack : "";
+        console.error("[startup] AppRoot module-load FAILED:", message, stack);
+        setPhase({
+          kind: "recovery",
+          stage: "module-load (AppRoot.tsx)",
+          error: stack ? `${message}\n\n${stack}` : message,
+        });
+      }
+    }, 50);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, []);
+
+  if (phase.kind === "boot") return <RootStartScreen />;
+  if (phase.kind === "recovery") {
+    return <SystemRecoveryScreen stage={phase.stage} error={phase.error} />;
+  }
+
+  const { AppRoot } = phase;
   return (
-    <View style={styles.root}>
+    <TopBoundary
+      onError={(e) =>
+        setPhase({
+          kind: "recovery",
+          stage: "render (top boundary)",
+          error: String(e?.message || e),
+        })
+      }
+    >
+      <AppRoot />
+    </TopBoundary>
+  );
+}
+
+function RootStartScreen() {
+  return (
+    <View style={styles.bootRoot}>
       <Text style={styles.title}>IFCDC ROOT LOADED {BUILD_LABEL}</Text>
       <Text style={styles.subtitle}>React mounted successfully</Text>
       <View style={styles.divider} />
       <Text style={styles.info}>
         {Platform.OS} {String(Platform.Version)}
       </Text>
-      <Text style={styles.info}>{new Date().toISOString()}</Text>
-      <Text style={styles.hint}>
-        If you can read this, the entry chain is healthy. The next build will
-        re-enable the real login flow on top of this foundation.
-      </Text>
+      <Text style={styles.hint}>Loading real app…</Text>
+    </View>
+  );
+}
+
+function SystemRecoveryScreen({
+  stage,
+  error,
+}: {
+  stage: string;
+  error: string;
+}) {
+  console.log("[startup] SYSTEM RECOVERY MODE", { stage });
+  return (
+    <View style={styles.recoveryRoot}>
+      <ScrollView contentContainerStyle={styles.recoveryScroll}>
+        <Text style={styles.recoveryTitle}>System Recovery Mode</Text>
+        <Text style={styles.subtitle}>{BUILD_LABEL}</Text>
+        <View style={styles.divider} />
+        <Text style={styles.recoveryLabel}>Failed at</Text>
+        <Text style={styles.recoveryBody} selectable>
+          {stage}
+        </Text>
+        <Text style={styles.recoveryLabel}>Error</Text>
+        <Text style={styles.recoveryBody} selectable>
+          {error}
+        </Text>
+        <Text style={styles.recoveryLabel}>Platform</Text>
+        <Text style={styles.recoveryBody} selectable>
+          {Platform.OS} {String(Platform.Version)}
+        </Text>
+        <Text style={styles.hint}>
+          The IFCDC Barbers app couldn't bring up its real flow. Please share
+          this screen with support so the issue can be patched.
+        </Text>
+      </ScrollView>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  root: {
+  bootRoot: {
     flex: 1,
     backgroundColor: "#0b0b0b",
     alignItems: "center",
@@ -97,11 +212,31 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
   hint: {
-    color: "#777",
+    color: "#888",
     fontSize: 11,
     marginTop: 28,
     textAlign: "center",
     lineHeight: 16,
     maxWidth: 320,
   },
+  recoveryRoot: { flex: 1, backgroundColor: "#0b0b0b" },
+  recoveryScroll: { padding: 24, paddingTop: 72 },
+  recoveryTitle: {
+    color: "#F5C842",
+    fontSize: 22,
+    fontWeight: "800",
+    letterSpacing: 1.0,
+    marginBottom: 8,
+    textAlign: "center",
+  },
+  recoveryLabel: {
+    color: "#F5C842",
+    fontSize: 12,
+    fontWeight: "700",
+    letterSpacing: 1.2,
+    marginTop: 16,
+    marginBottom: 4,
+    textTransform: "uppercase",
+  },
+  recoveryBody: { color: "#fff", fontSize: 13, lineHeight: 19 },
 });
