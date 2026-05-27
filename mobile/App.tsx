@@ -30,7 +30,7 @@ import {
   View,
 } from "react-native";
 
-const BUILD_LABEL = "BUILD 22";
+const BUILD_LABEL = "BUILD 23";
 
 console.log("[startup] ROOT START", {
   buildLabel: BUILD_LABEL,

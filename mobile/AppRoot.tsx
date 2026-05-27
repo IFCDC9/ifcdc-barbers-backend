@@ -1,31 +1,37 @@
 /**
- * AppRoot.tsx — Build 22 controlled reintegration of the real provider tree
- * on top of Build 21's stable mount. This module is lazy-`require()`-d from
- * App.tsx, so any module-load throw here is caught and surfaced as
- * "System Recovery Mode" instead of a silent black screen.
+ * AppRoot.tsx — Build 23 production-shell reintegration on top of the
+ * Build 22 stable boot. This module is lazy-`require()`-d from App.tsx,
+ * so any module-load throw here is caught and surfaced as "System Recovery
+ * Mode" instead of a silent black screen.
  *
- * Build 22 boot phases:
+ * Boot phases (visible in the JS console):
  *   ROOT START    (App.tsx renders placeholder)        — Build 21 baseline
  *   STORAGE READY (AsyncStorage probe completed)       — phase 1
  *   AUTH READY    (SecureStore probe completed)        — phase 2
  *   API READY     (BACKEND_URL validated)              — phase 3
  *   NAV READY     (NavigationContainer onReady fired)  — after gate
- *   HOME READY    (Dashboard / Login mounted)          — final
+ *   HOME READY    (HomeTabs / Login mounted)           — final
  *
- * Build 22 intentionally re-enables ONLY the bare minimum auth flow so we
- * can prove the provider stack is stable end-to-end:
- *   - SafeAreaProvider
- *   - AuthProvider (auth context with SecureStore + /auth/me background)
- *   - i18n (synchronous module-load init)
- *   - NavigationContainer + native stack
- *   - LoginScreen, RegisterScreen, PasswordResetScreen, DashboardShell
+ * Build 23 promotes the post-auth route from a static `DashboardShell`
+ * to `<HomeTabs />`, the real customer surface (Home, Book, AURA, Profile,
+ * conditional Admin). Each tab is mounted through `<LazyScreen />`, which
+ * isolates module-load and render-time failures to a single feature card
+ * so the overall app stays alive when one feature throws.
  *
- * Deliberately deferred to later builds (re-enable one per build):
- *   - Tabs (Booking, Appointments, AURA, Profile, AdminStack)
- *   - All 9 legal/policy screens
+ * Architectural rules preserved from Build 22 (do NOT regress):
+ *   - Single NavigationContainer (here, in AuthGate). Nested navigators
+ *     inside tabs (AdminStack, ProfileStack) are plain Stack.Navigators,
+ *     never their own NavigationContainer.
+ *   - No expo-router imports anywhere in the entry chain.
+ *   - AuthGate sequence (storage → auth → api → ready) is unchanged.
+ *   - AuthProvider, SafeAreaProvider, i18n initialisation untouched.
+ *   - Each provider keeps its ProviderBoundary; HomeTabs gets one too.
+ *
+ * Deliberately deferred to later builds:
+ *   - Stack routes for BookingDetail, Reschedule, Cancel, EditProfile, etc.
+ *     (each will be added through LazyScreen the same way the tabs are)
  *   - expo-notifications service + push-token registration
- *   - Heavy animations / video backgrounds / realtime sockets (none of these
- *     exist in this codebase today, but listed for the playbook)
+ *   - Heavy animations / video backgrounds / realtime sockets
  */
 
 import React from "react";
@@ -53,6 +59,7 @@ import { BACKEND_URL } from "./constants/config";
 import LoginScreen from "./screens/LoginScreen";
 import RegisterScreen from "./screens/RegisterScreen";
 import PasswordResetScreen from "./screens/PasswordResetScreen";
+import HomeTabs from "./navigation/HomeTabs";
 
 console.log("[startup] AppRoot module loaded");
 
@@ -89,7 +96,7 @@ class ProviderBoundary extends React.Component<
       <View style={recoveryStyles.root}>
         <ScrollView contentContainerStyle={recoveryStyles.scroll}>
           <Text style={recoveryStyles.title}>System Recovery Mode</Text>
-          <Text style={recoveryStyles.subtitle}>BUILD 22</Text>
+          <Text style={recoveryStyles.subtitle}>BUILD 23</Text>
           <View style={recoveryStyles.divider} />
           <Text style={recoveryStyles.label}>Failed provider</Text>
           <Text style={recoveryStyles.body} selectable>
@@ -193,10 +200,10 @@ function AuthGate() {
       >
         <Stack.Navigator
           screenOptions={{ headerShown: false }}
-          initialRouteName={token ? "Dashboard" : "Login"}
+          initialRouteName={token ? "Main" : "Login"}
         >
           {token ? (
-            <Stack.Screen name="Dashboard" component={DashboardShell} />
+            <Stack.Screen name="Main" component={MainShell} />
           ) : (
             <>
               <Stack.Screen name="Login" component={LoginScreen} />
@@ -211,41 +218,21 @@ function AuthGate() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// DashboardShell — minimal post-login placeholder. Booking, AURA, the rest
-// of the tabs and admin tooling come back online in Build 23+.
+// MainShell — the post-auth tabbed surface. Wrapped in a ProviderBoundary so
+// a render failure inside the tab navigator (e.g. icon library, useAuth blip)
+// renders System Recovery Mode instead of black-screening the navigator. The
+// boundary owns logging the [startup] HOME READY signal once the tab navigator
+// has rendered for the first time.
 // ─────────────────────────────────────────────────────────────────────────────
 
-function DashboardShell() {
-  const { user, signOut } = useAuth();
-
+function MainShell() {
   React.useEffect(() => {
     console.log("[startup] HOME READY");
   }, []);
-
-  const onSignOut = React.useCallback(async () => {
-    try {
-      await signOut();
-    } catch (e) {
-      console.warn("[dashboard] sign-out failed:", String(e));
-    }
-  }, [signOut]);
-
   return (
-    <View style={dashStyles.root}>
-      <Text style={dashStyles.brand}>IFCDC Barbers</Text>
-      <Text style={dashStyles.welcome}>
-        Welcome back{user?.email ? `, ${user.email}` : ""}
-      </Text>
-      <View style={{ height: 24 }} />
-      <Text style={dashStyles.note}>Build 22 dashboard shell</Text>
-      <Text style={dashStyles.note}>
-        Booking, services, AURA and the rest come back online in the next build.
-      </Text>
-      <View style={{ height: 32 }} />
-      <Text style={dashStyles.signOut} onPress={onSignOut}>
-        Sign out
-      </Text>
-    </View>
+    <ProviderBoundary name="HomeTabs">
+      <HomeTabs />
+    </ProviderBoundary>
   );
 }
 
@@ -291,44 +278,6 @@ const progressStyles = StyleSheet.create({
     fontSize: 12,
     letterSpacing: 1.2,
     fontWeight: "600",
-  },
-});
-
-const dashStyles = StyleSheet.create({
-  root: {
-    flex: 1,
-    backgroundColor: "#0b0b0b",
-    alignItems: "center",
-    justifyContent: "center",
-    padding: 24,
-  },
-  brand: {
-    color: "#F5C842",
-    fontSize: 26,
-    fontWeight: "800",
-    letterSpacing: 1.4,
-    marginBottom: 6,
-  },
-  welcome: {
-    color: "#fff",
-    fontSize: 15,
-    textAlign: "center",
-  },
-  note: {
-    color: "#888",
-    fontSize: 12,
-    textAlign: "center",
-    marginTop: 4,
-    maxWidth: 280,
-    lineHeight: 17,
-  },
-  signOut: {
-    color: "#F5C842",
-    fontSize: 14,
-    fontWeight: "700",
-    textDecorationLine: "underline",
-    paddingHorizontal: 12,
-    paddingVertical: 8,
   },
 });
 
