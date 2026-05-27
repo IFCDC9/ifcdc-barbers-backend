@@ -210,44 +210,70 @@ export async function pingBookingApi() {
  */
 export async function startAppBookingCheckout(payload) {
   logApiEnvOnce();
-  const legacyPayPalOrderUrl = apiFullUrl("/api/paypal/create-app-booking-order");
-  console.log("PAYPAL API URL (legacy ref):", legacyPayPalOrderUrl);
   const url = apiFullUrl("/api/app-bookings/start");
-  console.log("BOOKING CHECKOUT URL (this request):", url);
-
-  const res = await bookingFetch(url, {
-    method: "POST",
-    headers: { Accept: "application/json", "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
+  console.log("BOOKING CHECKOUT URL:", url);
+  console.log("CHECKOUT INIT payload:", {
+    barberName: payload?.barberName,
+    barberId: payload?.barberId,
+    barberUuid: payload?.barberUuid,
+    serviceId: payload?.serviceId,
+    dateLabel: payload?.dateLabel,
+    timeLabel: payload?.timeLabel,
+    redirectUri: payload?.redirectUri,
   });
-  const json = await parseJson(res);
-  if (!res.ok || json.success === false) {
-    console.warn("[paypal] checkout start failed", {
-      status: res.status,
-      error: json.error,
-      message: json.message,
-      paypalDetail: json.paypalDetail,
-      paypal: json.paypal,
-      url,
+  console.log("PAYPAL CLIENT (mobile env):", process.env.EXPO_PUBLIC_PAYPAL_CLIENT_ID ?? "(unset — server creates order)");
+  console.log("PAYPAL ENV (mobile):", process.env.EXPO_PUBLIC_PAYPAL_ENV ?? "(unset)");
+
+  try {
+    const res = await bookingFetch(url, {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
     });
-    const msg = json.message || json.error || `HTTP ${res.status}`;
-    const err = new Error(msg);
-    err.code = json.error;
-    err.details = json;
-    err.status = res.status;
-    err.url = url;
+    const json = await parseJson(res);
+    console.log("CHECKOUT RESPONSE:", {
+      status: res.status,
+      ok: res.ok,
+      success: json?.success,
+      error: json?.error,
+      message: json?.message,
+      orderId: json?.orderId,
+      hasApproveUrl: Boolean(json?.approveUrl),
+      paypal: json?.paypal,
+    });
+    if (!res.ok || json.success === false) {
+      const msg =
+        json.message ||
+        json.error ||
+        (typeof json.raw === "string" && json.raw.slice(0, 200)) ||
+        `HTTP ${res.status}`;
+      const err = new Error(msg);
+      err.code = json.error;
+      err.details = json;
+      err.status = res.status;
+      err.url = url;
+      throw err;
+    }
+    if (!json.orderId || !json.approveUrl) {
+      console.error("CHECKOUT INIT FAILED: missing orderId or approveUrl", json);
+      const err = new Error("Server did not return PayPal orderId and approveUrl.");
+      err.code = "missing_paypal_order";
+      err.details = json;
+      err.status = res.status;
+      err.url = url;
+      throw err;
+    }
+    console.log("[paypal] checkout start ok", {
+      orderId: json.orderId,
+      approveUrl: String(json.approveUrl).slice(0, 120),
+      total: json.total,
+      bookingId: json.bookingId,
+    });
+    return json;
+  } catch (err) {
+    console.error("CHECKOUT INIT FAILED:", err);
     throw err;
   }
-  console.log("[paypal] checkout start ok", {
-    orderId: json.orderId,
-    approveUrl: json.approveUrl ? String(json.approveUrl).slice(0, 120) : null,
-    total: json.total,
-    bookingId: json.bookingId,
-  });
-  if (!json.orderId || !json.approveUrl) {
-    console.warn("[paypal] checkout start missing orderId or approveUrl", json);
-  }
-  return json;
 }
 
 /**

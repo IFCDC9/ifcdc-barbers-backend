@@ -39,6 +39,7 @@ import {
   paymentMethodDisplayLabel,
   paymentStatusHeadline,
 } from '../utils/bookingDisplay';
+import { formatCheckoutError } from '../utils/checkoutError';
 
 const FALLBACK_SERVICE_PRICE = 25;
 
@@ -321,6 +322,8 @@ function BookingScreen() {
       });
 
       const redirectUri = Linking.createURL('paypal-booking/');
+      console.log('[checkout] redirectUri:', redirectUri);
+      console.log('[checkout] serviceId:', serviceId, 'barber:', barber?.name, barber?.id);
 
       setPhaseLabel(t('booking.phases.creatingCheckout'));
       const barberUuid =
@@ -342,7 +345,9 @@ function BookingScreen() {
       }
 
       setPhaseLabel(t('booking.phases.completePayment'));
+      console.log('[checkout] opening PayPal approveUrl:', String(approveUrl).slice(0, 120));
       const browser = await WebBrowser.openAuthSessionAsync(approveUrl, redirectUri);
+      console.log('[checkout] PayPal browser result:', browser?.type, browser?.url?.slice?.(0, 80));
 
       if (browser.type === 'cancel' || browser.type === 'dismiss') {
         Alert.alert(t('booking.paymentCancelledTitle'), t('booking.paymentCancelledBody'));
@@ -408,33 +413,21 @@ function BookingScreen() {
       checkoutSucceeded = true;
       setStep(6);
     } catch (err) {
-      console.warn('[booking] checkout failed:', err?.message || err, err?.url, err?.status);
+      console.error('CHECKOUT INIT FAILED:', err);
       reportConnectionFailure({
         kind: err?.status >= 500 ? 'http' : 'network',
         url: err?.url,
         status: err?.status,
         message: err?.message,
       });
-      const rawMsg =
-        (err?.message && typeof err.message === 'string' ? err.message : '') ||
-        (typeof err === 'string' ? err : '');
-      const looksLikeDevText =
-        !rawMsg ||
-        /undefined|null|not_found|localhost|127\.0\.0\.1|http:\/\//i.test(rawMsg) ||
-        rawMsg.length > 160;
       const paymentFailed =
         err?.code === 'payment_not_captured' ||
         err?.code === 'payment_balance_mismatch' ||
-        /payment failed|not confirmed|not captured/i.test(rawMsg);
+        /payment failed|not confirmed|not captured/i.test(String(err?.message || ''));
       const msg = paymentFailed
         ? t('booking.paymentFailedNotConfirmed')
-        : looksLikeDevText
-          ? t('errors.actionCouldNotBeCompleted')
-          : rawMsg;
-      Alert.alert(
-        paymentFailed ? t('booking.paymentFailedTitle') : t('booking.checkoutAlertTitle'),
-        msg,
-      );
+        : formatCheckoutError(err);
+      Alert.alert('Checkout Error', msg);
     } finally {
       setProcessingPayment(false);
       if (!checkoutSucceeded) {

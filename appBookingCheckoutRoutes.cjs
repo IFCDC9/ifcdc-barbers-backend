@@ -34,6 +34,13 @@ const {
   settlementUpdateParams,
   PAYMENT_STATUS,
 } = require("./bookingPaymentSettlement.cjs");
+const {
+  isPayPalLive,
+  getPayPalEnvironmentMeta,
+  getPayPalHealthDiagnostics,
+  normalizePayPalEnvValue,
+  getPayPalSecret,
+} = require("./paypalEnv.cjs");
 
 const router = express.Router();
 
@@ -116,21 +123,6 @@ function extractPayPalErrorFull(err) {
   };
 }
 
-function getPayPalEnvironmentMeta() {
-  const live = isPayPalLive();
-  const mode = live ? "live" : "sandbox";
-  const clientId = normalizePayPalEnvValue(process.env.PAYPAL_CLIENT_ID);
-  return {
-    environment: mode,
-    apiBase: live ? "https://api-m.paypal.com" : "https://api-m.sandbox.paypal.com",
-    clientIdSet: Boolean(clientId),
-    secretSet: Boolean(getPayPalSecret()),
-    clientIdPreview: clientId.length > 12 ? `${clientId.slice(0, 8)}…${clientId.slice(-4)}` : clientId || null,
-    PAYPAL_ENV: normalizePayPalEnvValue(process.env.PAYPAL_ENV),
-    PAYPAL_MODE: normalizePayPalEnvValue(process.env.PAYPAL_MODE),
-  };
-}
-
 function assertValidPayPalAmount(label, value) {
   const n = Number(value);
   if (!Number.isFinite(n) || n <= 0) {
@@ -151,24 +143,6 @@ function extractCaptureIdFromOrder(capture) {
     }
   }
   return null;
-}
-
-function normalizePayPalEnvValue(raw) {
-  if (raw == null) return "";
-  let s = String(raw).replace(/\r/g, "").trim();
-  if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
-    s = s.slice(1, -1).trim();
-  }
-  return s;
-}
-
-function getPayPalSecret() {
-  return normalizePayPalEnvValue(process.env.PAYPAL_CLIENT_SECRET || process.env.PAYPAL_SECRET);
-}
-
-function isPayPalLive() {
-  const v = String(process.env.PAYPAL_ENV || process.env.PAYPAL_MODE || "").toLowerCase();
-  return v === "live" || v === "production" || v === "prod";
 }
 
 function getPayPalHttpClient() {
@@ -243,9 +217,27 @@ async function loadTier() {
   return Number(mod.BARBER_PLATFORM_FEE_USD ?? DEFAULT_PLATFORM_FEE);
 }
 
-router.get("/health", (_req, res) => {
+router.get("/health", async (_req, res) => {
   res.set("Cache-Control", "no-store");
-  res.json({ ok: true, paypal: getPayPalEnvironmentMeta() });
+  try {
+    const paypal = await getPayPalHealthDiagnostics();
+    if (!paypal.alignment?.ok) {
+      console.warn("[paypal] ENV MISALIGNMENT:", paypal.alignment?.message || "OAuth failed");
+    } else {
+      console.log("[paypal] OAuth OK —", paypal.environment, "token generation succeeded");
+    }
+    res.json({
+      ok: Boolean(paypal.alignment?.ok),
+      service: "ifcdc-barbers-backend696",
+      paypal,
+    });
+  } catch (e) {
+    console.error("[paypal] health diagnostics failed:", e?.message || e);
+    res.status(503).json({
+      ok: false,
+      paypal: { ...getPayPalEnvironmentMeta(), oauth: { ok: false, error: e?.message || String(e) } },
+    });
+  }
 });
 
 /** Bookable barbers from Postgres (source of truth for checkout). */
@@ -539,41 +531,54 @@ router.post("/start", async (req, res) => {
       if (bookingsColType !== "uuid") {
         assertNotUuidForBigintBarberId(insertBarberId, "bookings", req.path);
       }
+      const paymentTypeLabel = depositAmount > 0 ? "deposit" : "full";
       ins = await dbQuery(
-      `INSERT INTO bookings (
+        `INSERT INTO bookings (
          user_id, customer_name, customer_email, barber_name, barber_id, service, service_duration_minutes, date, time, amount,
-         service_price, total_price, deposit_amount, amount_paid, amount_charged, balance_due, remaining_balance,
-         payment_type, payment_status, payment_provider,
+         total_price, deposit_amount, amount_paid, remaining_balance, payment_type, payment_status, payment_provider,
          paypal_order_id, platform_fee, total_amount, booking_status, is_paid_booking,
          platform_fee_status, barber_payout_amount, barber_fee_billed, tip_amount, total_paid, business_id
        ) VALUES (
          NULL, $1, $2, $3, $4, $5, $6, $7::date, $8::time, $9,
-         $10, $10, $11, 0, 0, $12, $12,
-         $17, 'unpaid', 'paypal',
-         NULL, $13, $14, 'pending_payment', false,
-         'pending', $15, false, 0, 0, $16
+         $10, $11, 0, $12, $13, 'unpaid', 'paypal',
+         NULL, $14, $15, 'pending_payment', false,
+         'pending', $16, false, 0, 0, $17
        )
        RETURNING id`,
-      [
-        customerName,
-        customerEmail,
-        confirmedBarberName,
-        insertBarberId,
-        serviceTitle,
-        Number(serviceRow.duration_minutes) || 30,
-        dateStr,
-        timeSql,
-        haircutPrice,
-        depositAmount,
-        remainingBalance,
-        platformFee,
-        total,
-        barberPayout,
-        Number.isFinite(tenantBiz) ? tenantBiz : null,
-        depositAmount > 0 ? "deposit" : "full",
-      ],
-    );
+        [
+          customerName,
+          customerEmail,
+          confirmedBarberName,
+          insertBarberId,
+          serviceTitle,
+          Number(serviceRow.duration_minutes) || 30,
+          dateStr,
+          timeSql,
+          haircutPrice,
+          haircutPrice,
+          depositAmount,
+          remainingBalance,
+          paymentTypeLabel,
+          platformFee,
+          total,
+          barberPayout,
+          Number.isFinite(tenantBiz) ? tenantBiz : null,
+        ],
+      );
+      await dbQuery(
+        `UPDATE bookings SET
+           service_price = COALESCE(service_price, $2),
+           balance_due = COALESCE(balance_due, remaining_balance),
+           amount_charged = COALESCE(amount_charged, 0)
+         WHERE id = $1::uuid`,
+        [ins.rows[0].id, haircutPrice],
+      ).catch((colErr) => {
+        if (colErr?.code !== "42703") {
+          console.warn("[app-bookings] optional payment columns update skipped:", colErr?.message);
+        }
+      });
     } catch (insertErr) {
+      console.error("[app-bookings] booking INSERT failed:", insertErr?.code, insertErr?.message);
       if (insertErr?.code === "23505") {
         return res.status(409).json({
           success: false,
@@ -583,7 +588,11 @@ router.post("/start", async (req, res) => {
       }
       const barberErr = bookingStartErrorResponse(res, insertErr);
       if (barberErr) return barberErr;
-      throw insertErr;
+      return res.status(500).json({
+        success: false,
+        error: "booking_insert_failed",
+        message: insertErr?.message || "Could not create pending booking.",
+      });
     }
     const bookingId = ins.rows?.[0]?.id;
     if (!bookingId) {
@@ -638,6 +647,21 @@ router.post("/start", async (req, res) => {
         "[paypal] LIVE mode: return_url is not https — PayPal may reject order creation:",
         redirectUri,
       );
+    }
+
+    const paypalHealth = await getPayPalHealthDiagnostics();
+    if (!paypalHealth.alignment?.ok) {
+      console.error("[paypal] checkout blocked — env mismatch:", paypalHealth.alignment?.message);
+      return res.status(503).json({
+        success: false,
+        error: "paypal_env_mismatch",
+        message: paypalHealth.alignment?.message || "PayPal is misconfigured (sandbox vs live).",
+        paypal: {
+          environment: paypalHealth.environment,
+          credentialMode: paypalHealth.credentialMode,
+          oauth: paypalHealth.oauth,
+        },
+      });
     }
 
     const client = getPayPalHttpClient();
@@ -777,7 +801,7 @@ router.post("/start", async (req, res) => {
       return res.status(status).json({
         success: false,
         error: f.code || "start_failed",
-        message: f.message || "Unable to start checkout. Please try again.",
+        message: f.message || `PayPal checkout failed (${f.code || "paypal_error"}).`,
         paypalDetail: f.body || e?.paypalDetail || null,
         paypal: getPayPalEnvironmentMeta(),
       });
@@ -786,7 +810,7 @@ router.post("/start", async (req, res) => {
     return res.status(500).json({
       success: false,
       error: "server_error",
-      message: detail || "Unable to start checkout. Please try again.",
+      message: detail || "Checkout failed on the server.",
     });
   }
 });

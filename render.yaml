@@ -1,11 +1,13 @@
 # IFCDC Barbers — Render Web Service
 # https://render.com/docs/blueprint-spec
 #
-# After deploy: copy your service URL (e.g. https://ifcdc-barbers-backend.onrender.com)
-# into Twilio → Voice webhook: POST https://<that-host>/voice
+# Production API host (mobile + checkout): https://ifcdc-barbers-backend696.onrender.com
+# (Do NOT use ifcdc-barbers-backend.onrender.com — booking routes 404 there.)
 #
 # Set these in the Render dashboard (Environment) — do not commit secrets:
-#   PAYPAL_CLIENT_ID, PAYPAL_SECRET (checkout)
+#   PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET (same PayPal app — Sandbox OR Live, not mixed)
+#   PAYPAL_ENV=sandbox  OR  PAYPAL_ENV=live  (MUST match the app that issued the credentials)
+#   If credentials only work on live API, PAYPAL_ENV must be live (sandbox → invalid_client).
 #   DATABASE_URL (Supabase / Postgres)
 #   TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER (recommended)
 #   OPENAI_API_KEY, JWT_SECRET, GOOGLE_CLIENT_ID (if used)

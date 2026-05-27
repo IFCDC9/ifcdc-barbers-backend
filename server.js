@@ -132,6 +132,23 @@ console.log(
   "PAYPAL_ENV=",
   process.env.PAYPAL_ENV || process.env.PAYPAL_MODE || "(default sandbox)",
 );
+{
+  const { getPayPalHealthDiagnostics } = createRequire(import.meta.url)("./paypalEnv.cjs");
+  void getPayPalHealthDiagnostics()
+    .then((paypal) => {
+      if (paypal.alignment?.ok) {
+        console.log("[paypal] Startup OAuth OK —", paypal.environment, "token generation succeeded");
+      } else {
+        console.error("[paypal] Startup OAuth FAILED:", paypal.alignment?.message || paypal.oauth?.error);
+        if (paypal.credentialMode && paypal.credentialMode !== paypal.environment) {
+          console.error(
+            `[paypal] Fix Render: set PAYPAL_ENV=${paypal.credentialMode} (credentials are ${paypal.credentialMode}, not ${paypal.environment})`,
+          );
+        }
+      }
+    })
+    .catch((e) => console.error("[paypal] Startup diagnostics error:", e?.message || e));
+}
 console.log(
   "BUSINESS_PHONE:",
   process.env.BUSINESS_PHONE ? "set" : "default(+13313168167)",

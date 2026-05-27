@@ -17,7 +17,8 @@ function getPayPalSecret() {
 }
 
 export function isPayPalLive() {
-  return process.env.PAYPAL_ENV === "live" || process.env.PAYPAL_ENV === "production";
+  const v = String(process.env.PAYPAL_ENV || process.env.PAYPAL_MODE || "").toLowerCase();
+  return v === "live" || v === "production" || v === "prod";
 }
 
 export function getPayPalHttpClient() {
