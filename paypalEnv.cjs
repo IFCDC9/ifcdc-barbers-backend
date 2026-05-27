@@ -80,7 +80,25 @@ async function fetchPayPalOAuthToken(mode) {
       message: body.error_description || body.message || null,
     };
   }
-  return { ok: true, mode, status: res.status, tokenType: body.token_type || "Bearer" };
+  return {
+    ok: true,
+    mode,
+    status: res.status,
+    tokenType: body.token_type || "Bearer",
+    accessToken: body.access_token || null,
+  };
+}
+
+/** @returns {Promise<string>} Bearer access token for PayPal REST calls */
+async function getPayPalAccessToken() {
+  const meta = getPayPalEnvironmentMeta();
+  const oauth = await fetchPayPalOAuthToken(meta.environment);
+  if (!oauth.ok || !oauth.accessToken) {
+    const err = new Error(oauth.message || oauth.error || "PayPal OAuth failed");
+    err.code = oauth.error || "paypal_oauth_failed";
+    throw err;
+  }
+  return oauth.accessToken;
 }
 
 /**
@@ -147,6 +165,7 @@ module.exports = {
   isPayPalLive,
   getPayPalEnvironmentMeta,
   fetchPayPalOAuthToken,
+  getPayPalAccessToken,
   detectPayPalCredentialMode,
   getPayPalHealthDiagnostics,
 };

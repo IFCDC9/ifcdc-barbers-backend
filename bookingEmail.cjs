@@ -479,10 +479,90 @@ async function sendAuraVoiceBookingEmail(booking = {}) {
   return { ok: true };
 }
 
+/**
+ * Refund confirmation — customer + service@ifcdc.org (best-effort; does not throw).
+ * @param {object} p
+ */
+async function sendBookingRefundEmail({
+  name,
+  email,
+  service,
+  date,
+  time,
+  barberName,
+  refundAmount,
+  refundId,
+  reason,
+  paymentStatus,
+} = {}) {
+  const to = String(email || "").trim();
+  if (!to || /@ifcdc\.local$/i.test(to) || /^pending\+/i.test(to)) {
+    return { success: false, skipped: true, reason: "no_customer_email" };
+  }
+  if (!isResendConfigured()) {
+    return { success: false, skipped: true, reason: "resend_not_configured" };
+  }
+
+  const fmt = (n) => (Number.isFinite(Number(n)) ? Number(n).toFixed(2) : "0.00");
+  const safeName = escapeHtml(name || "Guest");
+  const safeService = escapeHtml(service || "Appointment");
+  const safeDate = escapeHtml(date || "TBD");
+  const safeTime = escapeHtml(time || "TBD");
+  const safeBarber = barberName ? escapeHtml(barberName) : "";
+  const statusLabel = String(paymentStatus || "refunded").replace(/_/g, " ").toUpperCase();
+  const subject = `[IFCDC] Refund processed — $${fmt(refundAmount)}`;
+  const html = `
+<h2>Refund confirmation</h2>
+<p>Name: ${safeName}</p>
+${safeBarber ? `<p>Barber: ${safeBarber}</p>` : ""}
+<p>Service: ${safeService}</p>
+<p>Date: ${safeDate}</p>
+<p>Time: ${safeTime}</p>
+<p><strong>Status:</strong> ${escapeHtml(statusLabel)}</p>
+<p>Refund amount: $${fmt(refundAmount)}</p>
+${refundId ? `<p>PayPal refund ref: ${escapeHtml(String(refundId))}</p>` : ""}
+${reason ? `<p>Reason: ${escapeHtml(String(reason))}</p>` : ""}
+<p>Funds typically return to your PayPal or card within 3–10 business days.</p>
+  `.trim();
+
+  const adminHtml = `
+<h2>Admin — booking refund</h2>
+<p>Customer: ${safeName} (${escapeHtml(to)})</p>
+<p>Service: ${safeService} · ${safeDate} ${safeTime}</p>
+<p>Refund: $${fmt(refundAmount)} · ${escapeHtml(statusLabel)}</p>
+${refundId ? `<p>PayPal refund: ${escapeHtml(String(refundId))}</p>` : ""}
+  `.trim();
+
+  try {
+    const customerResult = await sendResendWithRetry({
+      to,
+      subject,
+      html,
+      text: htmlToPlainText(html),
+    });
+    let adminResult = { ok: true };
+    try {
+      adminResult = await sendEmail({
+        to: "service@ifcdc.org",
+        subject: `[IFCDC Admin] Refund — ${safeName}`,
+        html: adminHtml,
+        text: htmlToPlainText(adminHtml),
+      });
+    } catch (adminErr) {
+      console.warn("[email] refund admin copy failed:", adminErr?.message || adminErr);
+    }
+    return { success: true, customer: customerResult, admin: adminResult };
+  } catch (e) {
+    console.warn("[email] sendBookingRefundEmail failed:", formatResendError(e));
+    return { success: false, error: formatResendError(e) };
+  }
+}
+
 module.exports = {
   sendBookingEmail,
   sendBookingConfirmationEmail,
   sendAuraVoiceBookingEmail,
+  sendBookingRefundEmail,
   isEmailConfigured,
   logResendStatus,
 };

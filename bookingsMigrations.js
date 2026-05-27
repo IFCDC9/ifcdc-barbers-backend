@@ -167,6 +167,19 @@ export async function ensureBookingsTable() {
   await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS barber_payout_amount NUMERIC(10,2) NOT NULL DEFAULT 0;`);
   await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS barber_fee_billed BOOLEAN NOT NULL DEFAULT false;`);
 
+  await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;`);
+  await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS deleted_by TEXT;`);
+  await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS delete_reason TEXT;`);
+  await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS paypal_refund_id TEXT;`);
+  await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS refund_amount NUMERIC(10,2);`);
+  await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS refunded_at TIMESTAMPTZ;`);
+  await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS refund_reason TEXT;`);
+  await dbQuery(`
+    CREATE INDEX IF NOT EXISTS bookings_deleted_at_idx
+    ON bookings (deleted_at)
+    WHERE deleted_at IS NOT NULL;
+  `);
+
   await dbQuery(`
     CREATE TABLE IF NOT EXISTS barber_fee_ledger (
       id BIGSERIAL PRIMARY KEY,

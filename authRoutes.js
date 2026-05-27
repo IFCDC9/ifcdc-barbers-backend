@@ -418,8 +418,11 @@ export function createAuthRouter({ sendEmail }) {
                 payment_status, booking_status, total_amount, platform_fee,
                 paypal_order_id, created_at
          FROM bookings
-         WHERE user_id = $1::uuid
-            OR (customer_email IS NOT NULL AND lower(trim(customer_email)) = lower(trim($2)))
+         WHERE deleted_at IS NULL
+           AND (
+             user_id = $1::uuid
+             OR (customer_email IS NOT NULL AND lower(trim(customer_email)) = lower(trim($2)))
+           )
          ORDER BY created_at DESC
          LIMIT 100`,
         [id, email || ""],

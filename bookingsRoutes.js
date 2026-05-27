@@ -23,6 +23,8 @@ import { BARBER_PLATFORM_FEE_USD, barberDepositsEffective } from "./subscription
 import { insertBarberFeeLedgerRow } from "./barberFeeLedger.js";
 import { createDepositPaymentLink } from "./depositPaymentLink.js";
 import { tenantMatches } from "./securityPolicy.js";
+import { createPlatformBookingOpsGuard } from "./bookingsAdminGuard.js";
+import { writeSecurityAudit } from "./auditSecurity.js";
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
@@ -41,6 +43,23 @@ const {
   bookingEmailPayloadFromRow,
   PAYMENT_STATUS,
 } = require("./bookingPaymentSettlement.cjs");
+const { refundPayPalCapture, round2: roundRefundMoney } = require("./paypalRefund.cjs");
+const { sendBookingRefundEmail } = require("./bookingEmail.cjs");
+
+const BOOKING_ACTIVE = "deleted_at IS NULL";
+const BOOKING_ACTIVE_B = "b.deleted_at IS NULL";
+
+function bookingHasRefundableCapture(booking) {
+  const captureId = String(booking?.paypal_capture_id || "").trim();
+  if (!captureId) return false;
+  const status = String(booking?.payment_status || "").toLowerCase();
+  if (status === "refunded" || status === "partially_refunded" || status === "refund_pending") {
+    return false;
+  }
+  const paid = Number(booking?.amount_paid ?? booking?.amount_charged ?? booking?.total_paid ?? 0);
+  if (paid > 0.01) return true;
+  return ["paid", "paid_full", "deposit_paid"].includes(status);
+}
 
 function getAuthPayload(req) {
   const token = extractBearerToken(req.get("authorization"));
@@ -424,6 +443,7 @@ async function resolveBookingActor(req, booking) {
 export function createBookingsRouter({ sendBookingEmail, sendBookingPush, requireAdmin } = {}) {
   const router = express.Router();
   const guard = typeof requireAdmin === "function" ? requireAdmin : (_req, _res, next) => next();
+  const platformOpsGuard = createPlatformBookingOpsGuard({ resolveAuthPayload });
 
   /**
    * Wrap the injected push dispatcher so route handlers can fire-and-forget
@@ -446,7 +466,9 @@ export function createBookingsRouter({ sendBookingEmail, sendBookingPush, requir
   // Admin list (scoped for shop_owner — see bookingsAdminGuard)
   router.get("/api/admin/bookings", guard, async (req, res) => {
     const scope = req.bookingsAdminScope || { all: true };
-    const tenantWhere = scope.all ? "" : " WHERE business_id = $1 ";
+    const tenantWhere = scope.all
+      ? ` WHERE ${BOOKING_ACTIVE} `
+      : ` WHERE business_id = $1 AND ${BOOKING_ACTIVE} `;
     const tenantParams = scope.all ? [] : [scope.businessId];
     const r = await dbQuery(
       `SELECT id, user_id, customer_name, customer_email, barber_name, barber_id, business_id, client_id, service, date, time,
@@ -472,6 +494,8 @@ export function createBookingsRouter({ sendBookingEmail, sendBookingPush, requir
               b.style_id, b.style_title, b.style_image_url, b.tip_amount, b.total_paid,
               b.platform_fee, b.platform_fee_status, b.barber_payout_amount, b.total_amount, b.booking_status, b.is_paid_booking,
               b.notes, b.cancelled_at, b.cancelled_by, b.created_at,
+              b.deleted_at, b.deleted_by, b.delete_reason,
+              b.paypal_refund_id, b.refund_amount, b.refunded_at, b.refund_reason,
               biz.name AS shop_name
        FROM bookings b
        LEFT JOIN businesses biz ON biz.id = b.business_id`;
@@ -485,7 +509,10 @@ export function createBookingsRouter({ sendBookingEmail, sendBookingPush, requir
       const tenantSql = scope.all ? "" : " AND b.business_id = $2 ";
       const params = scope.all ? [id] : [id, scope.businessId];
 
-      const r = await dbQuery(`${BOOKING_DETAIL_SELECT} WHERE b.id = $1::uuid${tenantSql} LIMIT 1`, params);
+      const r = await dbQuery(
+        `${BOOKING_DETAIL_SELECT} WHERE b.id = $1::uuid AND ${BOOKING_ACTIVE_B}${tenantSql} LIMIT 1`,
+        params,
+      );
       const booking = r.rows?.[0] || null;
       if (!booking) return res.status(404).json({ ok: false, message: "Booking not found" });
 
@@ -511,7 +538,10 @@ export function createBookingsRouter({ sendBookingEmail, sendBookingPush, requir
       const id = String(req.params.id || "").trim();
       if (!id) return res.status(400).json({ ok: false, message: "Booking id required" });
 
-      const r = await dbQuery(`${BOOKING_DETAIL_SELECT} WHERE b.id = $1::uuid LIMIT 1`, [id]);
+      const r = await dbQuery(
+        `${BOOKING_DETAIL_SELECT} WHERE b.id = $1::uuid AND ${BOOKING_ACTIVE_B} LIMIT 1`,
+        [id],
+      );
       const booking = r.rows?.[0] || null;
       if (!booking) return res.status(404).json({ ok: false, message: "Booking not found" });
 
@@ -550,7 +580,7 @@ export function createBookingsRouter({ sendBookingEmail, sendBookingPush, requir
           : null;
       const blockSlot = req.body?.blockSlot === true;
 
-      const r = await dbQuery(`${BOOKING_DETAIL_SELECT} WHERE b.id = $1::uuid LIMIT 1`, [id]);
+      const r = await dbQuery(`${BOOKING_DETAIL_SELECT} WHERE b.id = $1::uuid AND ${BOOKING_ACTIVE_B} LIMIT 1`, [id]);
       const booking = r.rows?.[0] || null;
       if (!booking) return res.status(404).json({ ok: false, message: "Booking not found" });
 
@@ -645,7 +675,7 @@ export function createBookingsRouter({ sendBookingEmail, sendBookingPush, requir
       const id = String(req.params.id || "").trim();
       if (!id) return res.status(400).json({ ok: false, message: "Booking id required" });
 
-      const sel = await dbQuery(`${BOOKING_DETAIL_SELECT} WHERE b.id = $1::uuid LIMIT 1`, [id]);
+      const sel = await dbQuery(`${BOOKING_DETAIL_SELECT} WHERE b.id = $1::uuid AND ${BOOKING_ACTIVE_B} LIMIT 1`, [id]);
       const booking = sel.rows?.[0] || null;
       if (!booking) return res.status(404).json({ ok: false, message: "Booking not found" });
 
@@ -727,7 +757,7 @@ export function createBookingsRouter({ sendBookingEmail, sendBookingPush, requir
         return res.status(400).json({ ok: false, message: "time is required (e.g. '10:30 AM')." });
       }
 
-      const sel = await dbQuery(`${BOOKING_DETAIL_SELECT} WHERE b.id = $1::uuid LIMIT 1`, [id]);
+      const sel = await dbQuery(`${BOOKING_DETAIL_SELECT} WHERE b.id = $1::uuid AND ${BOOKING_ACTIVE_B} LIMIT 1`, [id]);
       const booking = sel.rows?.[0] || null;
       if (!booking) return res.status(404).json({ ok: false, message: "Booking not found" });
 
@@ -912,7 +942,7 @@ export function createBookingsRouter({ sendBookingEmail, sendBookingPush, requir
       const note =
         typeof req.body?.note === "string" && req.body.note.trim() ? req.body.note.trim() : null;
 
-      const r = await dbQuery(`${BOOKING_DETAIL_SELECT} WHERE b.id = $1::uuid LIMIT 1`, [id]);
+      const r = await dbQuery(`${BOOKING_DETAIL_SELECT} WHERE b.id = $1::uuid AND ${BOOKING_ACTIVE_B} LIMIT 1`, [id]);
       const booking = r.rows?.[0] || null;
       if (!booking) return res.status(404).json({ ok: false, message: "Booking not found" });
 
@@ -1019,7 +1049,7 @@ export function createBookingsRouter({ sendBookingEmail, sendBookingPush, requir
       const id = String(req.params.id || "").trim();
       if (!id) return res.status(400).json({ ok: false, message: "Booking id required" });
 
-      const r = await dbQuery(`${BOOKING_DETAIL_SELECT} WHERE b.id = $1::uuid LIMIT 1`, [id]);
+      const r = await dbQuery(`${BOOKING_DETAIL_SELECT} WHERE b.id = $1::uuid AND ${BOOKING_ACTIVE_B} LIMIT 1`, [id]);
       const booking = r.rows?.[0] || null;
       if (!booking) return res.status(404).json({ ok: false, message: "Booking not found" });
 
@@ -1053,7 +1083,7 @@ export function createBookingsRouter({ sendBookingEmail, sendBookingPush, requir
         typeof req.body?.note === "string" && req.body.note.trim() ? req.body.note.trim() : null;
       if (!note) return res.status(400).json({ ok: false, message: "Note text is required" });
 
-      const r = await dbQuery(`${BOOKING_DETAIL_SELECT} WHERE b.id = $1::uuid LIMIT 1`, [id]);
+      const r = await dbQuery(`${BOOKING_DETAIL_SELECT} WHERE b.id = $1::uuid AND ${BOOKING_ACTIVE_B} LIMIT 1`, [id]);
       const booking = r.rows?.[0] || null;
       if (!booking) return res.status(404).json({ ok: false, message: "Booking not found" });
 
@@ -1088,7 +1118,10 @@ export function createBookingsRouter({ sendBookingEmail, sendBookingPush, requir
       const scopeParams = scope.all ? [id] : [id, scope.businessId];
       const detailTenantSql = scope.all ? "" : " AND b.business_id = $2 ";
 
-      const found = await dbQuery(`${BOOKING_DETAIL_SELECT} WHERE b.id = $1::uuid${detailTenantSql} LIMIT 1`, scopeParams);
+      const found = await dbQuery(
+        `${BOOKING_DETAIL_SELECT} WHERE b.id = $1::uuid AND ${BOOKING_ACTIVE_B}${detailTenantSql} LIMIT 1`,
+        scopeParams,
+      );
       const booking = found.rows?.[0] || null;
       if (!booking) return res.status(404).json({ ok: false, message: "Booking not found" });
 
@@ -1227,7 +1260,10 @@ export function createBookingsRouter({ sendBookingEmail, sendBookingPush, requir
       const tenantSql = scope.all ? "" : " AND b.business_id = $2 ";
       const params = scope.all ? [id] : [id, scope.businessId];
 
-      const r = await dbQuery(`${BOOKING_DETAIL_SELECT} WHERE b.id = $1::uuid${tenantSql} LIMIT 1`, params);
+      const r = await dbQuery(
+        `${BOOKING_DETAIL_SELECT} WHERE b.id = $1::uuid AND ${BOOKING_ACTIVE_B}${tenantSql} LIMIT 1`,
+        params,
+      );
       const booking = r.rows?.[0] || null;
       if (!booking) return res.status(404).json({ ok: false, message: "Booking not found" });
 
@@ -1261,6 +1297,250 @@ export function createBookingsRouter({ sendBookingEmail, sendBookingPush, requir
     } catch (e) {
       console.error("[booking] resend confirmation failed:", e?.stack || e);
       return res.status(500).json({ ok: false, message: "Could not resend confirmation" });
+    }
+  });
+
+  router.delete("/api/admin/bookings/:id", platformOpsGuard, async (req, res) => {
+    try {
+      const id = String(req.params.id || "").trim();
+      if (!id) return res.status(400).json({ ok: false, message: "Booking id required" });
+
+      const reason =
+        typeof req.body?.reason === "string" && req.body.reason.trim()
+          ? req.body.reason.trim().slice(0, 500)
+          : typeof req.query?.reason === "string" && req.query.reason.trim()
+            ? req.query.reason.trim().slice(0, 500)
+            : "Admin delete";
+
+      const found = await dbQuery(
+        `${BOOKING_DETAIL_SELECT} WHERE b.id = $1::uuid AND ${BOOKING_ACTIVE_B} LIMIT 1`,
+        [id],
+      );
+      const booking = found.rows?.[0] || null;
+      if (!booking) return res.status(404).json({ ok: false, message: "Booking not found" });
+
+      const actorId = req.user?.id ? String(req.user.id) : null;
+      const actorRole = String(req.user?.role || "admin");
+
+      const r = await dbQuery(
+        `UPDATE bookings SET
+           deleted_at = NOW(),
+           deleted_by = $2,
+           delete_reason = $3,
+           booking_status = 'cancelled',
+           is_paid_booking = false,
+           cancelled_at = COALESCE(cancelled_at, NOW()),
+           cancelled_by = COALESCE(cancelled_by, $4)
+         WHERE id = $1::uuid AND deleted_at IS NULL
+         RETURNING id, deleted_at, booking_status`,
+        [id, actorId || actorRole, reason, actorRole],
+      );
+      if (!r.rows?.length) {
+        return res.status(404).json({ ok: false, message: "Booking not found or already deleted" });
+      }
+
+      await recordStatusChange({
+        bookingId: id,
+        previousStatus: String(booking.booking_status || "").toLowerCase(),
+        newStatus: "cancelled",
+        actor: { userId: actorId, role: actorRole, email: req.user?.email || null },
+        note: `[deleted] ${reason}`,
+      });
+
+      void writeSecurityAudit({
+        eventType: "booking_deleted",
+        actorUserId: actorId,
+        actorEmail: req.user?.email || null,
+        req,
+        metadata: {
+          bookingId: id,
+          action: "delete",
+          reason,
+          barberId: booking.barber_id,
+          paymentStatus: booking.payment_status,
+        },
+      });
+
+      void dispatchBookingPush({
+        booking,
+        kind: "booking_cancelled",
+        audience: ["customer", "barber", "shop_owners"],
+        data: { bookingId: id, deleted: true },
+      });
+
+      return res.json({ ok: true, message: "Booking deleted permanently.", deleted: true });
+    } catch (e) {
+      console.error("[booking] admin delete failed:", e?.stack || e);
+      return res.status(500).json({ ok: false, message: "Could not delete booking" });
+    }
+  });
+
+  router.post("/api/admin/bookings/:id/refund", platformOpsGuard, async (req, res) => {
+    try {
+      const id = String(req.params.id || "").trim();
+      if (!id) return res.status(400).json({ ok: false, message: "Booking id required" });
+
+      const reason =
+        typeof req.body?.reason === "string" && req.body.reason.trim()
+          ? req.body.reason.trim().slice(0, 500)
+          : "Admin refund";
+
+      const found = await dbQuery(
+        `${BOOKING_DETAIL_SELECT} WHERE b.id = $1::uuid AND ${BOOKING_ACTIVE_B} LIMIT 1`,
+        [id],
+      );
+      const booking = found.rows?.[0] || null;
+      if (!booking) return res.status(404).json({ ok: false, message: "Booking not found" });
+
+      const captureId = String(booking.paypal_capture_id || "").trim();
+      if (!captureId) {
+        return res.status(400).json({
+          ok: false,
+          error: "no_payment_transaction",
+          message: "Refund unavailable: no payment transaction found.",
+        });
+      }
+
+      if (!bookingHasRefundableCapture(booking)) {
+        return res.status(400).json({
+          ok: false,
+          error: "not_refundable",
+          message: "This booking has no refundable PayPal payment.",
+        });
+      }
+
+      const charged = roundRefundMoney(
+        Number(booking.amount_charged ?? booking.amount_paid ?? booking.total_paid ?? 0),
+      );
+      const bodyAmount =
+        req.body?.amount != null && Number.isFinite(Number(req.body.amount))
+          ? roundRefundMoney(Number(req.body.amount))
+          : null;
+      const refundAmount = bodyAmount != null && bodyAmount > 0 ? bodyAmount : charged;
+      if (refundAmount <= 0) {
+        return res.status(400).json({
+          ok: false,
+          error: "invalid_amount",
+          message: "Refund amount must be greater than zero.",
+        });
+      }
+
+      await dbQuery(
+        `UPDATE bookings SET payment_status = 'refund_pending' WHERE id = $1::uuid AND deleted_at IS NULL`,
+        [id],
+      );
+
+      const paypalResult = await refundPayPalCapture(captureId, {
+        amount: refundAmount,
+        note: reason,
+      });
+
+      if (!paypalResult.ok) {
+        await dbQuery(
+          `UPDATE bookings SET payment_status = $2 WHERE id = $1::uuid AND deleted_at IS NULL`,
+          [id, String(booking.payment_status || "paid_full")],
+        );
+        return res.status(502).json({
+          ok: false,
+          error: paypalResult.error || "paypal_refund_failed",
+          message: paypalResult.message || "PayPal refund could not be completed.",
+        });
+      }
+
+      const isPartial = charged > 0 && refundAmount + 0.02 < charged;
+      const newPaymentStatus = isPartial ? "partially_refunded" : "refunded";
+      const previousStatus = String(booking.booking_status || "").toLowerCase();
+      const actorId = req.user?.id ? String(req.user.id) : null;
+      const actorRole = String(req.user?.role || "admin");
+
+      const r = await dbQuery(
+        `UPDATE bookings SET
+           payment_status = $2,
+           paypal_refund_id = $3,
+           refund_amount = $4,
+           refunded_at = NOW(),
+           refund_reason = $5,
+           booking_status = 'cancelled',
+           is_paid_booking = false,
+           remaining_balance = 0,
+           balance_due = 0,
+           cancelled_at = COALESCE(cancelled_at, NOW()),
+           cancelled_by = COALESCE(cancelled_by, $6)
+         WHERE id = $1::uuid AND deleted_at IS NULL
+         RETURNING id, payment_status, paypal_refund_id, refund_amount, refunded_at`,
+        [
+          id,
+          newPaymentStatus,
+          paypalResult.refundId || null,
+          refundAmount,
+          reason,
+          actorRole,
+        ],
+      );
+
+      if (!r.rows?.length) {
+        return res.status(404).json({ ok: false, message: "Booking not found" });
+      }
+
+      await recordStatusChange({
+        bookingId: id,
+        previousStatus,
+        newStatus: "cancelled",
+        actor: { userId: actorId, role: actorRole, email: req.user?.email || null },
+        note: `[refund] ${reason} · $${refundAmount.toFixed(2)}`,
+      });
+
+      void writeSecurityAudit({
+        eventType: "payment_refund",
+        actorUserId: actorId,
+        actorEmail: req.user?.email || null,
+        req,
+        metadata: {
+          bookingId: id,
+          action: "refund",
+          reason,
+          refundId: paypalResult.refundId || null,
+          captureId,
+          amount: refundAmount,
+          paymentStatus: newPaymentStatus,
+        },
+      });
+
+      const dateStr =
+        booking.date instanceof Date ? booking.date.toISOString().slice(0, 10) : String(booking.date || "").slice(0, 10);
+      const timeStr = String(booking.time || "").slice(0, 5);
+      void sendBookingRefundEmail({
+        name: booking.customer_name || "Guest",
+        email: booking.customer_email,
+        service: booking.style_title || booking.service || "Appointment",
+        date: dateStr,
+        time: timeStr,
+        barberName: booking.barber_name,
+        refundAmount,
+        refundId: paypalResult.refundId,
+        reason,
+        paymentStatus: newPaymentStatus,
+      }).catch((e) => console.warn("[email] refund confirmation:", e?.message || e));
+
+      void dispatchBookingPush({
+        booking,
+        kind: "booking_cancelled",
+        audience: ["customer", "barber", "shop_owners"],
+        data: { bookingId: id, refunded: true },
+      });
+
+      return res.json({
+        ok: true,
+        message: isPartial
+          ? `Partial refund of $${refundAmount.toFixed(2)} processed via PayPal.`
+          : `Refund of $${refundAmount.toFixed(2)} processed via PayPal.`,
+        booking: r.rows[0],
+        refundId: paypalResult.refundId,
+        amount: refundAmount,
+      });
+    } catch (e) {
+      console.error("[booking] admin refund failed:", e?.stack || e);
+      return res.status(500).json({ ok: false, message: e?.message || "Refund failed" });
     }
   });
 
@@ -1369,7 +1649,9 @@ export function createBookingsRouter({ sendBookingEmail, sendBookingPush, requir
   router.get("/api/admin/stats", guard, async (req, res) => {
     try {
       const scope = req.bookingsAdminScope || { all: true };
-      const tenantWhere = scope.all ? "" : " WHERE business_id = $1 ";
+      const tenantWhere = scope.all
+        ? ` WHERE ${BOOKING_ACTIVE} `
+        : ` WHERE business_id = $1 AND ${BOOKING_ACTIVE} `;
       const tenantParams = scope.all ? [] : [scope.businessId];
       const r = await dbQuery(
         `SELECT id, customer_name AS name, customer_email AS customerEmail,

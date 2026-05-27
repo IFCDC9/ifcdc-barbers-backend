@@ -79,6 +79,53 @@ export async function patchAdminBookingAction(
   return { message: labels[action] };
 }
 
+export async function deleteAdminBooking(
+  bookingId: string,
+  reason?: string,
+): Promise<{ message: string }> {
+  const res = await apiFetch(`/api/admin/bookings/${encodeURIComponent(bookingId)}`, {
+    method: "DELETE",
+    body: JSON.stringify({ reason: reason || "Admin delete" }),
+  });
+  const json = (await res.json()) as { message?: string; ok?: boolean };
+  if (!res.ok) {
+    throw new Error(json.message || "Booking could not be deleted.");
+  }
+  return { message: json.message || "Booking deleted permanently." };
+}
+
+export async function refundAdminBooking(
+  bookingId: string,
+  opts?: { amount?: number; reason?: string },
+): Promise<{ message: string; booking?: AdminBookingDetail; refundId?: string }> {
+  const res = await apiFetch(`/api/admin/bookings/${encodeURIComponent(bookingId)}/refund`, {
+    method: "POST",
+    body: JSON.stringify({
+      amount: opts?.amount,
+      reason: opts?.reason || "Admin refund",
+    }),
+  });
+  const json = (await res.json()) as {
+    message?: string;
+    booking?: Record<string, unknown>;
+    refundId?: string;
+    error?: string;
+  };
+  if (!res.ok) {
+    const msg =
+      json.message ||
+      (json.error === "no_payment_transaction"
+        ? "Refund unavailable: no payment transaction found."
+        : "Refund could not be completed.");
+    throw new Error(msg);
+  }
+  return {
+    message: json.message || "Refund processed",
+    booking: json.booking ? normalizeBooking(json.booking) : undefined,
+    refundId: json.refundId,
+  };
+}
+
 export async function resendBookingConfirmation(bookingId: string): Promise<string> {
   try {
     const res = await apiFetch(`/api/admin/bookings/${encodeURIComponent(bookingId)}/resend-confirmation`, {

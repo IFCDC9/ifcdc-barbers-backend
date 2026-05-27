@@ -1,24 +1,32 @@
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import {
   Alert,
   Linking,
-  Pressable,
   StyleSheet,
   Text,
   View,
 } from "react-native";
 import { ScreenLoading } from "../../components/LoadingState";
-import { RouteProp, useFocusEffect, useRoute } from "@react-navigation/native";
+import {
+  NavigationProp,
+  RouteProp,
+  useFocusEffect,
+  useNavigation,
+  useRoute,
+} from "@react-navigation/native";
 import ProfileScreenLayout from "../../components/ProfileScreenLayout";
 import ProfileCard from "../../components/ProfileCard";
 import GlowButton from "../../components/GlowButton";
 import BookingStatusBadge from "../../components/BookingStatusBadge";
 import {
+  deleteAdminBooking,
   fetchAdminBookingById,
   patchAdminBookingAction,
+  refundAdminBooking,
   resendBookingConfirmation,
   type AdminBookingDetail,
 } from "../../services/adminBookingApi";
+import { useAuth } from "../../services/authContext";
 import { maskPhoneForDisplay } from "../../utils/redactPii";
 import {
   displayCustomerEmail,
@@ -29,6 +37,11 @@ import {
   paymentMethodDisplayLabel,
   paymentStatusHeadline,
 } from "../../utils/bookingDisplay";
+import {
+  bookingPaymentDisplayStatus,
+  canPerformBookingDestructiveOps,
+  canShowRefundClientButton,
+} from "../../utils/bookingOpsAccess";
 import { userFacingApiError } from "../../utils/userFacingApiError";
 import { theme } from "../../constants/theme";
 import type { AdminStackParamList } from "../../navigation/AdminStack";
@@ -64,13 +77,25 @@ function paymentSummary(booking: AdminBookingDetail): string {
   return `Paid in full · Charged ${formatMoney(paid || booking.total_amount || booking.total_price)} · Platform fee ${formatMoney(platformFee)} (${feeStatus}) · Barber payout ${formatMoney(payout)}`;
 }
 
+function paymentStatusLabel(booking: AdminBookingDetail): string {
+  return bookingPaymentDisplayStatus(booking).replace(/_/g, " ");
+}
+
 export default function AdminBookingDetailScreen() {
   const route = useRoute<DetailRoute>();
+  const navigation = useNavigation<NavigationProp<AdminStackParamList>>();
   const { bookingId } = route.params;
+  const { user, token } = useAuth();
 
   const [loading, setLoading] = useState(true);
   const [booking, setBooking] = useState<AdminBookingDetail | null>(null);
   const [busy, setBusy] = useState(false);
+
+  const canDestructive = canPerformBookingDestructiveOps(user, token);
+  const showRefund = useMemo(
+    () => Boolean(booking && canDestructive && canShowRefundClientButton(booking)),
+    [booking, canDestructive],
+  );
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -93,13 +118,13 @@ export default function AdminBookingDetailScreen() {
   const runAction = (
     title: string,
     message: string,
-    action: "complete" | "cancel" | "refund",
+    action: "complete" | "cancel",
   ) => {
     Alert.alert(title, message, [
       { text: "Cancel", style: "cancel" },
       {
         text: "Confirm",
-        style: action === "cancel" || action === "refund" ? "destructive" : "default",
+        style: action === "cancel" ? "destructive" : "default",
         onPress: async () => {
           setBusy(true);
           try {
@@ -115,6 +140,88 @@ export default function AdminBookingDetailScreen() {
         },
       },
     ]);
+  };
+
+  const onRefundClient = () => {
+    if (!booking) return;
+    if (!canShowRefundClientButton(booking)) {
+      Alert.alert(
+        "Refund unavailable",
+        "Refund unavailable: no payment transaction found.",
+      );
+      return;
+    }
+    Alert.alert(
+      "Refund Client",
+      `Issue a PayPal refund of ${formatMoney(
+        booking.amount_charged ?? booking.amount_paid ?? booking.total_paid,
+      )}? This cannot be undone.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Refund via PayPal",
+          style: "destructive",
+          onPress: async () => {
+            setBusy(true);
+            try {
+              const result = await refundAdminBooking(bookingId, { reason: "Admin refund" });
+              if (result.booking) {
+                setBooking((prev) => ({ ...(prev || {}), ...result.booking }));
+              }
+              Alert.alert("Refund processed", result.message);
+              void load();
+            } catch (e) {
+              Alert.alert("Refund failed", userFacingApiError(e));
+            } finally {
+              setBusy(false);
+            }
+          },
+        },
+      ],
+    );
+  };
+
+  const onDeleteBooking = () => {
+    Alert.alert(
+      "Delete this booking permanently?",
+      "This cannot be undone.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Continue",
+          style: "destructive",
+          onPress: () => {
+            Alert.alert(
+              "Confirm permanent delete",
+              "The booking will be removed from schedules, customer history, and admin lists.",
+              [
+                { text: "Go back", style: "cancel" },
+                {
+                  text: "Delete permanently",
+                  style: "destructive",
+                  onPress: async () => {
+                    setBusy(true);
+                    try {
+                      const result = await deleteAdminBooking(bookingId, "Admin delete");
+                      Alert.alert("Deleted", result.message, [
+                        {
+                          text: "OK",
+                          onPress: () => navigation.goBack(),
+                        },
+                      ]);
+                    } catch (e) {
+                      Alert.alert("Delete failed", userFacingApiError(e));
+                    } finally {
+                      setBusy(false);
+                    }
+                  },
+                },
+              ],
+            );
+          },
+        },
+      ],
+    );
   };
 
   const onResend = async () => {
@@ -198,8 +305,9 @@ export default function AdminBookingDetailScreen() {
 
       <ProfileCard style={styles.section}>
         <Text style={styles.sectionTitle}>Payment</Text>
+        <MetaRow label="Payment status" value={paymentStatusLabel(booking)} />
         <MetaRow
-          label="Payment status"
+          label="Settlement"
           value={paymentStatusHeadline(
             booking.payment_status,
             (booking as { balance_due?: number }).balance_due ?? booking.remaining_balance,
@@ -253,6 +361,11 @@ export default function AdminBookingDetailScreen() {
             }
           />
         ) : null}
+        {!showRefund && canDestructive ? (
+          <Text style={styles.refundUnavailable}>
+            Refund unavailable: no payment transaction found.
+          </Text>
+        ) : null}
       </ProfileCard>
 
       <ProfileCard style={styles.section}>
@@ -278,32 +391,39 @@ export default function AdminBookingDetailScreen() {
         />
         <GlowButton label="Contact customer" variant="outline" onPress={onContact} disabled={busy} />
         <GlowButton
-          label="Refund booking"
-          variant="outline"
-          onPress={() =>
-            runAction(
-              "Refund booking",
-              "Record a refund and cancel this booking? PayPal settlement may require provider review.",
-              "refund",
-            )
-          }
-          disabled={busy}
-        />
-        <GlowButton
           label="Cancel booking"
           variant="outline"
           onPress={() =>
-            runAction("Cancel booking", "Cancel this appointment? This cannot be undone from the app.", "cancel")
+            runAction("Cancel booking", "Cancel this appointment? The record stays in admin history.", "cancel")
           }
           disabled={busy}
         />
+
+        {canDestructive ? (
+          <>
+            {showRefund ? (
+              <GlowButton
+                label="Refund Client"
+                variant="danger"
+                onPress={onRefundClient}
+                disabled={busy}
+                loading={busy}
+              />
+            ) : null}
+            <GlowButton
+              label="Delete Booking"
+              variant="danger"
+              onPress={onDeleteBooking}
+              disabled={busy}
+            />
+          </>
+        ) : null}
       </View>
     </ProfileScreenLayout>
   );
 }
 
 const styles = StyleSheet.create({
-  loader: { marginTop: 32 },
   muted: { color: theme.colors.textMuted, textAlign: "center", marginTop: 24, fontSize: 15 },
   hero: { gap: 10, paddingVertical: 16 },
   heroTop: { flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", gap: 12 },
@@ -335,6 +455,12 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     maxWidth: "58%",
     textAlign: "right",
+  },
+  refundUnavailable: {
+    color: theme.colors.textMuted,
+    fontSize: 13,
+    marginTop: 10,
+    fontStyle: "italic",
   },
   actions: { gap: 10, marginTop: 4, marginBottom: 8 },
 });

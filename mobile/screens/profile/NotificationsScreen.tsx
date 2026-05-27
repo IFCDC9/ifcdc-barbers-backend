@@ -75,6 +75,7 @@ function permissionLabel(state: NotificationDebugState | null): string {
 }
 
 export default function NotificationsScreen() {
+  const { t } = useTranslation();
   const [prefs, setPrefs] = useState<ServerNotificationPreferences>(DEFAULT_SERVER_PREFS);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);

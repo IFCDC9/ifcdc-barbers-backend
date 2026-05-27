@@ -18,9 +18,15 @@ import {
   type BookingDetail,
 } from "../../services/bookingDetailApi";
 import {
+  deleteAdminBooking,
   patchAdminBookingAction,
+  refundAdminBooking,
   resendBookingConfirmation,
 } from "../../services/adminBookingApi";
+import {
+  canPerformBookingDestructiveOps,
+  canShowRefundClientButton,
+} from "../../utils/bookingOpsAccess";
 import {
   BOOKING_STATUSES,
   canRoleTransition,
@@ -203,7 +209,7 @@ export default function BookingDetailScreen() {
   const route = useRoute<Route>();
   const navigation = useNavigation<NavigationProp<NavParams>>();
   const { bookingId } = route.params;
-  const { user } = useAuth();
+  const { user, token } = useAuth();
   const { t } = useTranslation();
   const role = resolveActorRole(user?.role);
   // Customer-facing subtitles are translated; staff/admin subtitles are kept
@@ -321,7 +327,10 @@ export default function BookingDetailScreen() {
   }, [booking, currentStatus, role, HANDLED_BY_DEDICATED_BUTTONS]);
 
   const canResend = role !== "customer";
-  const canRefund = role === "super_admin" || role === "admin" || role === "shop_owner";
+  const canDestructive = canPerformBookingDestructiveOps(user, token);
+  const showRefundClient = Boolean(
+    booking && canDestructive && canShowRefundClientButton(booking),
+  );
   const canViewReceipt = true;
 
   const updateStatus = useCallback(
@@ -444,34 +453,81 @@ export default function BookingDetailScreen() {
     Alert.alert("Contact customer", "How would you like to reach them?", choices);
   };
 
-  const onRefund = () => {
+  const onRefundClient = () => {
+    if (!booking || !canShowRefundClientButton(booking)) {
+      Alert.alert(
+        "Refund unavailable",
+        "Refund unavailable: no payment transaction found.",
+      );
+      return;
+    }
     Alert.alert(
-      "Refund booking",
-      "Record a refund and cancel this booking? PayPal settlement may require provider review.",
+      "Refund Client",
+      "Issue a PayPal refund and cancel this booking? Funds return via PayPal in 3–10 business days.",
       [
         { text: "Cancel", style: "cancel" },
         {
-          text: "Confirm refund",
+          text: "Refund via PayPal",
           style: "destructive",
           onPress: async () => {
             setBusy(true);
             try {
-              const result = await patchAdminBookingAction(bookingId, "refund");
+              const result = await refundAdminBooking(bookingId, { reason: "Admin refund" });
               if (result.booking) {
                 setBooking((prev) =>
                   prev ? { ...prev, ...(result.booking as Partial<BookingDetail>) } : prev,
                 );
               }
-              Alert.alert("Refund recorded", result.message);
+              Alert.alert("Refund processed", result.message);
               void load();
             } catch (e) {
               Alert.alert(
                 "Refund failed",
-                userFacingApiError(e, "Refund could not be recorded right now."),
+                userFacingApiError(e, "Refund could not be completed."),
               );
             } finally {
               setBusy(false);
             }
+          },
+        },
+      ],
+    );
+  };
+
+  const onDeleteBooking = () => {
+    Alert.alert(
+      "Delete this booking permanently?",
+      "This cannot be undone.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Continue",
+          style: "destructive",
+          onPress: () => {
+            Alert.alert(
+              "Confirm permanent delete",
+              "The booking will be removed from schedules, customer history, and admin lists.",
+              [
+                { text: "Go back", style: "cancel" },
+                {
+                  text: "Delete permanently",
+                  style: "destructive",
+                  onPress: async () => {
+                    setBusy(true);
+                    try {
+                      const result = await deleteAdminBooking(bookingId, "Admin delete");
+                      Alert.alert("Deleted", result.message, [
+                        { text: "OK", onPress: () => navigation.goBack() },
+                      ]);
+                    } catch (e) {
+                      Alert.alert("Delete failed", userFacingApiError(e));
+                    } finally {
+                      setBusy(false);
+                    }
+                  },
+                },
+              ],
+            );
           },
         },
       ],
@@ -767,12 +823,19 @@ export default function BookingDetailScreen() {
           </Text>
         ) : null}
 
-        {canRefund ? (
-          // Refund is admin/shop-owner only — operational; English label kept.
+        {showRefundClient ? (
           <GlowButton
-            label="Refund booking"
-            variant="outline"
-            onPress={onRefund}
+            label="Refund Client"
+            variant="danger"
+            onPress={onRefundClient}
+            disabled={busy}
+          />
+        ) : null}
+        {canDestructive ? (
+          <GlowButton
+            label="Delete Booking"
+            variant="danger"
+            onPress={onDeleteBooking}
             disabled={busy}
           />
         ) : null}

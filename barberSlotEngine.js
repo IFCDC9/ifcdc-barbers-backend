@@ -283,6 +283,7 @@ export async function loadOccupiedSlotLabels(barberId, dateStr, barberName = "",
                barber_id = $1
                OR ($3 <> '' AND lower(trim(barber_name)) = lower(trim($3)))
              )
+             AND deleted_at IS NULL
              AND (
                (
                  booking_status = 'confirmed'
@@ -305,6 +306,7 @@ export async function loadOccupiedSlotLabels(barberId, dateStr, barberName = "",
              AND ($4::text IS NULL OR id::text <> $4::text)
              AND $2 <> ''
              AND lower(trim(barber_name)) = lower(trim($2))
+             AND deleted_at IS NULL
              AND (
                (
                  booking_status = 'confirmed'

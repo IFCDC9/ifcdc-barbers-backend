@@ -21,7 +21,12 @@ const PAYMENT_EVENT_TYPES = new Set([
   "platform_fee",
 ]);
 
-const BOOKING_EVENT_TYPES = new Set(["booking_override", "booking_cancel_admin", "booking_create_admin"]);
+const BOOKING_EVENT_TYPES = new Set([
+  "booking_override",
+  "booking_cancel_admin",
+  "booking_create_admin",
+  "booking_deleted",
+]);
 
 const USER_EVENT_TYPES = new Set([
   "invite_sent",
@@ -55,6 +60,7 @@ function formatAction(eventType) {
     user_created: "User account created",
     booking_cancel_admin: "Booking cancelled by admin",
     booking_create_admin: "Booking created by admin",
+    booking_deleted: "Booking deleted by admin",
   };
   return map[eventType] || String(eventType || "Platform event").replace(/_/g, " ");
 }
