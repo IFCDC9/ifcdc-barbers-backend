@@ -1,6 +1,8 @@
-import React, { useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Animated,
+  Easing,
   FlatList,
   KeyboardAvoidingView,
   Platform,
@@ -38,6 +40,37 @@ export default function AuraChatPanel() {
   const [sending, setSending] = useState(false);
   const [lastFailedUserText, setLastFailedUserText] = useState<string | null>(null);
   const listRef = useRef<FlatList<Msg>>(null);
+  const glow = useRef(new Animated.Value(0.35)).current;
+
+  useEffect(() => {
+    const pulse = Animated.loop(
+      Animated.sequence([
+        Animated.timing(glow, {
+          toValue: 1,
+          duration: 2200,
+          easing: Easing.inOut(Easing.sin),
+          useNativeDriver: true,
+        }),
+        Animated.timing(glow, {
+          toValue: 0.35,
+          duration: 2200,
+          easing: Easing.inOut(Easing.sin),
+          useNativeDriver: true,
+        }),
+      ]),
+    );
+    pulse.start();
+    return () => pulse.stop();
+  }, [glow]);
+
+  const haloOpacity = glow.interpolate({
+    inputRange: [0.35, 1],
+    outputRange: [0.14, 0.32],
+  });
+  const haloScale = glow.interpolate({
+    inputRange: [0.35, 1],
+    outputRange: [1, 1.12],
+  });
 
   const suggestionKeys = useMemo(
     () =>
@@ -143,7 +176,13 @@ export default function AuraChatPanel() {
     >
       <View style={styles.header}>
         <View style={styles.orbWrap}>
-          <View pointerEvents="none" style={styles.orbHalo} />
+          <Animated.View
+            pointerEvents="none"
+            style={[
+              styles.orbHalo,
+              { opacity: haloOpacity, transform: [{ scale: haloScale }] },
+            ]}
+          />
           <View style={styles.orb}>
             <View pointerEvents="none" style={styles.orbInnerRing} />
             <Text style={styles.orbLabel}>AURA</Text>

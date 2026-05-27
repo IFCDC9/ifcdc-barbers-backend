@@ -96,7 +96,7 @@ class ProviderBoundary extends React.Component<
       <View style={recoveryStyles.root}>
         <ScrollView contentContainerStyle={recoveryStyles.scroll}>
           <Text style={recoveryStyles.title}>System Recovery Mode</Text>
-          <Text style={recoveryStyles.subtitle}>BUILD 23</Text>
+          <Text style={recoveryStyles.subtitle}>BUILD 24</Text>
           <View style={recoveryStyles.divider} />
           <Text style={recoveryStyles.label}>Failed provider</Text>
           <Text style={recoveryStyles.body} selectable>
