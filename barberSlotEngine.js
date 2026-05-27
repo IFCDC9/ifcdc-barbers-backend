@@ -287,7 +287,7 @@ export async function loadOccupiedSlotLabels(barberId, dateStr, barberName = "",
                (
                  booking_status = 'confirmed'
                  AND is_paid_booking = true
-                 AND payment_status IN ('paid', 'deposit_paid')
+                 AND payment_status IN ('paid', 'paid_full', 'deposit_paid')
                )
                OR (
                  booking_status = 'pending'
@@ -309,7 +309,7 @@ export async function loadOccupiedSlotLabels(barberId, dateStr, barberName = "",
                (
                  booking_status = 'confirmed'
                  AND is_paid_booking = true
-                 AND payment_status IN ('paid', 'deposit_paid')
+                 AND payment_status IN ('paid', 'paid_full', 'deposit_paid')
                )
                OR (
                  booking_status = 'pending'

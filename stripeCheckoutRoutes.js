@@ -176,18 +176,22 @@ export async function handleStripeWebhook(req, res) {
       if (bookingId) {
         await dbQuery(
           `UPDATE bookings SET
-             payment_status = 'paid',
+             payment_status = 'paid_full',
              booking_status = 'confirmed',
              status = 'confirmed',
              is_paid_booking = true,
              stripe_payment_intent_id = COALESCE(NULLIF($2::text, ''), stripe_payment_intent_id),
              payment_id = COALESCE(NULLIF($2::text, ''), payment_id),
              payment_provider = 'stripe',
+             payment_method = 'card',
+             payment_type = 'full',
              amount_paid = COALESCE(total_amount, total_price + COALESCE(platform_fee, 0), amount),
              total_paid = COALESCE(total_amount, total_price + COALESCE(platform_fee, 0), amount),
              remaining_balance = 0,
-             platform_fee = COALESCE($3::numeric, platform_fee)
-           WHERE id = $1::uuid`,
+             platform_fee = COALESCE($3::numeric, platform_fee),
+             platform_fee_status = 'collected'
+           WHERE id = $1::uuid
+             AND COALESCE(amount_paid, 0) <= 0`,
           [bookingId, pi, platformFeeApplied],
         );
         try {

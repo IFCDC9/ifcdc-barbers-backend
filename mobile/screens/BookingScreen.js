@@ -33,6 +33,12 @@ import {
   APP_BRAND_NAME,
   buildBookingShareMessage,
 } from '../utils/shareContent';
+import {
+  formatAppointmentDateLabel,
+  formatMoney,
+  paymentMethodDisplayLabel,
+  paymentStatusHeadline,
+} from '../utils/bookingDisplay';
 
 const FALLBACK_SERVICE_PRICE = 25;
 
@@ -356,18 +362,29 @@ function BookingScreen() {
         throw new Error('Server did not return a confirmed booking');
       }
 
+      const amountPaid = Number(b.amountPaid ?? b.amount_paid ?? 0);
+      const remainingBalance = Number(b.remainingBalance ?? b.remaining_balance ?? 0);
+      const platformFeePaid = Number(b.platformFee ?? b.platform_fee ?? platformFee);
+      const servicePricePaid = Number(b.servicePrice ?? b.haircutPrice ?? b.service_price ?? servicePrice);
+      const paymentStatus = String(b.paymentStatus ?? b.payment_status ?? 'paid_full');
+      const paymentMethod = String(b.paymentMethod ?? b.payment_method ?? 'paypal');
+
       setSuccessPayload({
         bookingId: b.id,
         barber: b.barberName || barber?.name,
         service: b.service || selectedService?.name,
         date: String(b.date ?? date),
         time: String(b.time ?? time),
-        depositPaid: Number(b.depositPaid ?? dep ?? 0),
-        remainingBalance: Number(b.remainingBalance ?? 0),
-        total: Number(b.total ?? total),
-        platformFee: Number(b.platformFee ?? platformFee),
-        servicePrice: Number(b.haircutPrice ?? servicePrice),
-        captureId: b.captureId,
+        depositPaid: Number(b.depositPaid ?? b.depositAmount ?? dep ?? 0),
+        remainingBalance,
+        total: Number(b.total ?? b.totalDue ?? total),
+        platformFee: platformFeePaid,
+        servicePrice: servicePricePaid,
+        amountPaid,
+        paymentStatus,
+        paymentMethod,
+        captureId: b.captureId ?? b.transactionId ?? b.paypal_capture_id,
+        paymentStatusLabel: paymentStatusHeadline(paymentStatus, remainingBalance, amountPaid),
       });
       setPhaseLabel(t('booking.phases.confirmed'));
       checkoutSucceeded = true;
@@ -453,16 +470,47 @@ function BookingScreen() {
             </Text>
             <Text style={{ color: '#fff', marginBottom: 6 }}>
               <Text style={{ color: '#888' }}>{t('booking.when')} </Text>
-              {dateDisplay(successPayload.date)} · {successPayload.time}
+              {formatAppointmentDateLabel(successPayload.date, successPayload.time)}
+            </Text>
+            <Text
+              style={{
+                color: successPayload.paymentStatusLabel === 'PAID IN FULL' ? '#6ee7b7' : '#fbbf24',
+                fontWeight: '800',
+                fontSize: 16,
+                marginBottom: 12,
+                letterSpacing: 0.5,
+              }}
+            >
+              {t('booking.paymentStatus')}: {successPayload.paymentStatusLabel}
             </Text>
             <Text style={{ color: '#fff', marginBottom: 6 }}>
-              <Text style={{ color: '#888' }}>{t('booking.depositPaid')} </Text>$
-              {Number(successPayload.depositPaid).toFixed(2)}
+              <Text style={{ color: '#888' }}>{t('booking.amountPaid')} </Text>
+              {formatMoney(successPayload.amountPaid)}
             </Text>
             <Text style={{ color: '#fff', marginBottom: 6 }}>
-              <Text style={{ color: '#888' }}>{t('booking.remainingBalance')} </Text>$
-              {Number(successPayload.remainingBalance).toFixed(2)}
+              <Text style={{ color: '#888' }}>{t('booking.platformFee')} </Text>
+              {formatMoney(successPayload.platformFee)}
             </Text>
+            <Text style={{ color: '#fff', marginBottom: 6 }}>
+              <Text style={{ color: '#888' }}>{t('booking.service')} </Text>
+              {formatMoney(successPayload.servicePrice)}
+            </Text>
+            {Number(successPayload.remainingBalance) > 0.01 ? (
+              <Text style={{ color: '#fbbf24', marginBottom: 6, fontWeight: '600' }}>
+                <Text style={{ color: '#888' }}>{t('booking.remainingBalance')} </Text>
+                {formatMoney(successPayload.remainingBalance)}
+              </Text>
+            ) : null}
+            <Text style={{ color: '#fff', marginBottom: 6 }}>
+              <Text style={{ color: '#888' }}>{t('booking.paymentMethod')} </Text>
+              {paymentMethodDisplayLabel(successPayload.paymentMethod)}
+            </Text>
+            {successPayload.captureId ? (
+              <Text style={{ color: '#aaa', marginBottom: 6, fontSize: 12 }} selectable>
+                <Text style={{ color: '#888' }}>{t('booking.transactionId')} </Text>
+                {successPayload.captureId}
+              </Text>
+            ) : null}
             <Text style={{ color: '#FFD700', marginTop: 10, fontSize: 18 }}>
               {t('booking.bookingId')}{' '}
               <Text style={{ color: '#fff' }}>{successPayload.bookingId || '—'}</Text>

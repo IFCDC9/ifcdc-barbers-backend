@@ -37,6 +37,7 @@ import {
   formatBookingDateTime,
   formatCreatedAt,
   formatMoney,
+  paymentStatusHeadline,
   rawBookingStatusLabel,
 } from "../../utils/bookingDisplay";
 import { userFacingApiError } from "../../utils/userFacingApiError";
@@ -588,10 +589,22 @@ export default function BookingDetailScreen() {
         <Text style={styles.sectionTitle}>{t("booking.details.payment")}</Text>
         <MetaRow
           label={t("booking.details.paymentStatus")}
-          value={String(booking.payment_status || "pending").replace(/_/g, " ")}
+          value={paymentStatusHeadline(
+            booking.payment_status,
+            booking.remaining_balance,
+            booking.amount_paid ?? booking.total_paid,
+          )}
         />
         <MetaRow label={t("booking.details.servicePrice")} value={servicePriceFor(booking)} />
         <MetaRow label={t("booking.platformFee")} value={formatMoney(booking.platform_fee)} />
+        <MetaRow
+          label={t("booking.amountPaid")}
+          value={formatMoney(booking.amount_paid ?? booking.total_paid)}
+        />
+        <MetaRow
+          label={t("booking.remainingBalance")}
+          value={formatMoney(booking.remaining_balance)}
+        />
         <MetaRow
           label={t("booking.details.totalPaid")}
           value={formatMoney(booking.total_paid ?? booking.total_amount)}

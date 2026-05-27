@@ -19,9 +19,11 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.ifcdc.barbers",
-      "buildNumber": "25",
+      "buildNumber": "26",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
+        "NSMicrophoneUsageDescription": "IFCDC Barbers uses the microphone only if you choose to use voice features with AURA or speak appointment details.",
+        "NSSpeechRecognitionUsageDescription": "IFCDC Barbers uses speech recognition only if you choose to use voice features with AURA, so the app can understand spoken appointment or service requests.",
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoads": false,
           "NSExceptionDomains": {
@@ -38,7 +40,7 @@
     },
     "android": {
       "package": "com.ifcdc.barbers",
-      "versionCode": 24,
+      "versionCode": 26,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#050505"

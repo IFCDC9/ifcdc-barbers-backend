@@ -274,6 +274,14 @@ export async function finalizeAppBookingCheckout(orderID) {
     err.url = url;
     throw err;
   }
+  const b = json.booking;
+  const paid = Number(b?.amountPaid ?? b?.amount_paid ?? 0);
+  if (!b?.id || !(paid > 0)) {
+    const err = new Error("Payment was not captured. Your booking was not confirmed.");
+    err.code = "payment_not_captured";
+    err.details = json;
+    throw err;
+  }
   return json;
 }
 

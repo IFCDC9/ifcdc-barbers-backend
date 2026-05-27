@@ -43,7 +43,7 @@ function appVersionString(): string {
 
 const GOOGLE_REDIRECT_OPTIONS = {
   useProxy: true,
-  projectNameForProxy: "@ifcdc696/ifcdc-barbers-app",
+  projectNameForProxy: "@ifcdc696/ifcdc-barbers-backend",
 } as const;
 
 export default function RegisterScreen({ navigation }: { navigation: any }) {

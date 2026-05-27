@@ -22,6 +22,70 @@ export function formatMoney(v: unknown): string {
   return Number.isFinite(n) ? `$${n.toFixed(2)}` : "—";
 }
 
+/** Human-readable appointment date — never show raw ISO UTC strings. */
+export function formatAppointmentDateLabel(date?: string | null, time?: string | null): string {
+  return formatBookingDateTime(date ?? undefined, time ?? undefined);
+}
+
+export type PaymentDisplayKind = "paid_full" | "balance_due" | "unpaid" | "failed" | "other";
+
+export function resolvePaymentDisplayKind(
+  paymentStatus?: string | null,
+  remainingBalance?: number | null,
+  amountPaid?: number | null,
+): PaymentDisplayKind {
+  const status = String(paymentStatus || "")
+    .trim()
+    .toLowerCase();
+  const remaining = Number(remainingBalance);
+  const paid = Number(amountPaid);
+
+  if (status === "failed") return "failed";
+  if (status === "unpaid" || status === "pending" || status === "checkout_created") return "unpaid";
+  if (
+    status === "paid_full" ||
+    status === "paid" ||
+    (paid > 0 && Number.isFinite(remaining) && remaining <= 0.01)
+  ) {
+    return "paid_full";
+  }
+  if (
+    status === "balance_due" ||
+    status === "deposit_paid" ||
+    (Number.isFinite(remaining) && remaining > 0.01)
+  ) {
+    return "balance_due";
+  }
+  return "other";
+}
+
+/** Large confirmation label: PAID IN FULL vs BALANCE DUE */
+export function paymentStatusHeadline(
+  paymentStatus?: string | null,
+  remainingBalance?: number | null,
+  amountPaid?: number | null,
+): string {
+  const kind = resolvePaymentDisplayKind(paymentStatus, remainingBalance, amountPaid);
+  if (kind === "paid_full") return "PAID IN FULL";
+  if (kind === "balance_due") return "BALANCE DUE";
+  if (kind === "unpaid") return "UNPAID";
+  if (kind === "failed") return "PAYMENT FAILED";
+  return String(paymentStatus || "PENDING")
+    .replace(/_/g, " ")
+    .toUpperCase();
+}
+
+export function paymentMethodDisplayLabel(method?: string | null, provider?: string | null): string {
+  const m = String(method || provider || "")
+    .trim()
+    .toLowerCase();
+  if (m === "card" || m === "stripe") return "Card";
+  if (m === "paypal") return "PayPal";
+  if (m === "cash" || m === "manual") return "Cash / manual";
+  if (!m) return "—";
+  return m.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 function parseTimeParts(time?: string): { hours: number; minutes: number } | null {
   const raw = String(time || "").trim();
   if (!raw) return null;
@@ -117,8 +181,9 @@ export function bookingStatusTone(paymentStatus?: string, bookingStatus?: string
   if (book === "confirmed") return "paid";
   if (book === "pending") return "pending";
 
-  if (pay.includes("paid") || pay === "completed") return "paid";
-  if (pay.includes("pending") || pay.includes("deposit") || pay.includes("person")) return "pending";
+  if (pay === "paid_full" || pay === "paid" || pay === "completed") return "paid";
+  if (pay === "balance_due" || pay === "deposit_paid") return "pending";
+  if (pay.includes("pending") || pay.includes("deposit") || pay.includes("person") || pay === "unpaid") return "pending";
   return "neutral";
 }
 

@@ -65,7 +65,11 @@ export async function ensureBookingsTable() {
   await dbQuery(`
     UPDATE bookings SET is_paid_booking = true
     WHERE payment_provider = 'paypal'
-      AND payment_status IN ('paid', 'deposit_paid');
+      AND payment_status IN ('paid', 'paid_full', 'deposit_paid');
+  `);
+  await dbQuery(`
+    UPDATE bookings SET payment_status = 'paid_full'
+    WHERE payment_status = 'paid' AND COALESCE(remaining_balance, 0) <= 0.01;
   `);
   await dbQuery(`
     UPDATE bookings SET booking_status = 'pending'
@@ -126,7 +130,7 @@ export async function ensureBookingsTable() {
     ON bookings (barber_id, date, time)
     WHERE booking_status = 'confirmed'
       AND is_paid_booking = true
-      AND payment_status IN ('paid', 'deposit_paid');
+      AND payment_status IN ('paid', 'paid_full', 'deposit_paid');
   `);
 
   await dbQuery(`CREATE INDEX IF NOT EXISTS bookings_created_at_idx ON bookings (created_at DESC);`);
@@ -148,6 +152,7 @@ export async function ensureBookingsTable() {
   await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS deposit_payment_link TEXT;`);
   await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS deposit_transaction_id TEXT;`);
   await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS deposit_paypal_order_id TEXT;`);
+  await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS payment_method TEXT;`);
   await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS platform_fee_status VARCHAR(50) NOT NULL DEFAULT 'pending';`);
   await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS barber_payout_amount NUMERIC(10,2) NOT NULL DEFAULT 0;`);
   await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS barber_fee_billed BOOLEAN NOT NULL DEFAULT false;`);

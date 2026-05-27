@@ -23,11 +23,18 @@ const {
   logBookingInsertSuccess,
 } = require("./barberIdentity.cjs");
 const { handlePublicBarberServicesGet, handlePublicBarbersListGet } = require("./bookingPublicHandlers.cjs");
+const {
+  DEFAULT_PLATFORM_FEE: SETTLEMENT_PLATFORM_FEE,
+  extractPayPalCapturedUsd,
+  computeSettlementFromCapture,
+  bookingPaymentViewFromRow,
+  PAYMENT_STATUS,
+} = require("./bookingPaymentSettlement.cjs");
 
 const router = express.Router();
 
 const DEFAULT_HAIRCUT_USD = Number(process.env.APP_BOOKING_HAIRCUT_USD || 25);
-const DEFAULT_PLATFORM_FEE = 0.99;
+const DEFAULT_PLATFORM_FEE = SETTLEMENT_PLATFORM_FEE;
 
 let cachedBarbersIdType = null;
 async function getBarbersIdColumnTypeCached() {
@@ -526,8 +533,8 @@ router.post("/start", async (req, res) => {
          platform_fee_status, barber_payout_amount, barber_fee_billed, tip_amount, total_paid, business_id
        ) VALUES (
          NULL, $1, $2, $3, $4, $5, $6, $7::date, $8::time, $9,
-         $10, $11, 0, $12, 'full', 'pending', 'paypal',
-         NULL, $13, $14, 'pending', false,
+         $10, $11, 0, $12, 'full', 'unpaid', 'paypal',
+         NULL, $13, $14, 'pending_payment', false,
          'pending', $15, false, 0, 0, $16
        )
        RETURNING id`,
@@ -798,12 +805,12 @@ router.post("/finalize", async (req, res) => {
       });
     }
 
-    if (String(row.payment_status || "") === "paid" && row.paypal_capture_id) {
-      const haircutPrice = round2(Number(row.total_price ?? row.amount ?? 0));
-      const depositPaid = round2(Number(row.deposit_amount ?? 0));
-      const remainingBalance = round2(Number(row.remaining_balance ?? 0));
-      const platformFee = round2(Number(row.platform_fee ?? DEFAULT_PLATFORM_FEE));
-      const total = round2(haircutPrice + depositPaid + platformFee);
+    const haircutPrice = round2(Number(row.total_price ?? row.amount ?? 0));
+    const depositAmount = round2(Number(row.deposit_amount ?? 0));
+    const platformFee = round2(Number(row.platform_fee ?? DEFAULT_PLATFORM_FEE));
+
+    if (row.paypal_capture_id && String(row.paypal_capture_id) === captureId) {
+      const view = bookingPaymentViewFromRow(row);
       return res.json({
         verified: true,
         booking: {
@@ -811,34 +818,77 @@ router.post("/finalize", async (req, res) => {
           barberName: row.barber_name,
           date: row.date,
           time: row.time,
-          depositPaid,
-          remainingBalance,
-          total,
-          platformFee,
-          haircutPrice,
           service: row.service,
-          captureId: row.paypal_capture_id,
+          ...view,
+          haircutPrice: view.servicePrice,
+          total: view.totalDue,
         },
       });
     }
 
-    const haircutPrice = round2(Number(row.total_price ?? row.amount ?? 0));
-    const depositPaid = round2(Number(row.deposit_amount ?? 0));
-    const remainingBalance = round2(Number(row.remaining_balance ?? 0));
-    const platformFee = round2(Number(row.platform_fee ?? DEFAULT_PLATFORM_FEE));
-    const total = round2(haircutPrice + depositPaid + platformFee);
+    const capturedUsd = extractPayPalCapturedUsd(capture);
+    if (capturedUsd == null) {
+      return res.status(400).json({
+        verified: false,
+        error: "no_capture_amount",
+        message: "PayPal did not return a capture amount.",
+      });
+    }
+
+    const settlement = computeSettlementFromCapture({
+      servicePrice: haircutPrice,
+      depositAmount,
+      platformFee,
+      capturedUsd,
+      paymentProvider: "paypal",
+    });
+
+    if (!settlement.ok) {
+      await dbQuery(
+        `UPDATE bookings SET payment_status = $2, booking_status = 'pending_payment', is_paid_booking = false WHERE id = $1::uuid`,
+        [row.id, PAYMENT_STATUS.FAILED],
+      ).catch(() => {});
+      return res.status(400).json({
+        verified: false,
+        error: settlement.error,
+        message: settlement.message,
+      });
+    }
+
+    if (settlement.amountPaid <= 0) {
+      return res.status(400).json({
+        verified: false,
+        error: "zero_capture",
+        message: "Cannot confirm booking without a captured payment.",
+      });
+    }
 
     await dbQuery(
       `UPDATE bookings SET
-         payment_status = 'paid',
-         booking_status = 'confirmed',
-         is_paid_booking = true,
-         paypal_capture_id = $2,
-         amount_paid = $3,
-         total_paid = $3,
+         payment_status = $2,
+         booking_status = $3,
+         is_paid_booking = $4,
+         paypal_capture_id = $5,
+         payment_method = $6,
+         payment_type = $7,
+         amount_paid = $8,
+         total_paid = $8,
+         remaining_balance = $9,
+         total_amount = $10,
          platform_fee_status = 'collected'
        WHERE id = $1::uuid`,
-      [row.id, captureId, total],
+      [
+        row.id,
+        settlement.paymentStatus,
+        settlement.bookingStatus,
+        settlement.isPaidBooking,
+        captureId,
+        settlement.paymentMethod,
+        settlement.paymentType,
+        settlement.amountPaid,
+        settlement.remainingBalance,
+        settlement.totalDue,
+      ],
     );
 
     try {
@@ -903,20 +953,28 @@ router.post("/finalize", async (req, res) => {
       console.warn("[app-bookings] push dispatcher unavailable:", pushErr?.message || pushErr);
     }
 
+    const updated = await dbQuery(
+      `SELECT id, barber_name, date, time, service, total_price, amount, deposit_amount,
+              remaining_balance, platform_fee, amount_paid, total_paid, payment_status,
+              payment_method, payment_provider, paypal_capture_id, stripe_payment_intent_id,
+              payment_id, total_amount
+       FROM bookings WHERE id = $1::uuid LIMIT 1`,
+      [row.id],
+    );
+    const fresh = updated.rows?.[0] || row;
+    const view = bookingPaymentViewFromRow(fresh);
+
     return res.json({
       verified: true,
       booking: {
-        id: row.id,
-        barberName: row.barber_name,
-        date: row.date,
-        time: row.time,
-        depositPaid,
-        remainingBalance,
-        total,
-        platformFee,
-        haircutPrice,
-        service: row.service,
-        captureId,
+        id: fresh.id,
+        barberName: fresh.barber_name,
+        date: fresh.date,
+        time: fresh.time,
+        service: fresh.service,
+        ...view,
+        haircutPrice: view.servicePrice,
+        total: view.totalDue,
       },
     });
   } catch (e) {

@@ -1402,9 +1402,13 @@ export function createBookingsRouter({ sendBookingEmail, sendBookingPush, requir
               payment_status AS "rawPaymentStatus",
               booking_status AS "bookingStatus",
               is_paid_booking AS "isPaidBooking",
+              payment_method AS "paymentMethod",
               CASE
-                WHEN payment_status = 'paid' THEN 'paid_paypal'
+                WHEN payment_status IN ('paid', 'paid_full') THEN
+                  CASE WHEN payment_provider = 'stripe' OR payment_method = 'card' THEN 'paid_card' ELSE 'paid_paypal' END
                 WHEN payment_status = 'deposit_paid' THEN 'deposit_paypal'
+                WHEN payment_status = 'balance_due' THEN 'balance_due'
+                WHEN payment_status = 'unpaid' OR payment_status = 'failed' THEN 'unpaid'
                 ELSE 'pay_in_person'
               END AS "paymentStatus",
               paypal_order_id AS "paypalOrderId",
@@ -1455,7 +1459,11 @@ export function createBookingsRouter({ sendBookingEmail, sendBookingPush, requir
         pendingPaymentsAmount,
         pendingPaymentsCount: rows.filter((b) => b.paymentStatus === "pay_in_person").length,
         outstandingBalanceAmount,
-        outstandingBalanceCount: rows.filter((b) => Number(b.remainingBalance || 0) > 0).length,
+        outstandingBalanceCount: rows.filter(
+          (b) =>
+            Number(b.remainingBalance || 0) > 0.01 ||
+            String(b.rawPaymentStatus || "").toLowerCase() === "balance_due",
+        ).length,
         totalPlatformEarnings: totalCollected,
         platformFeesCollected: platformAgg.platformFeesCollected,
         paidBookingsCount: platformAgg.paidBookingsCount,

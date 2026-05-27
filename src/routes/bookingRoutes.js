@@ -387,6 +387,14 @@ router.post("/confirm", (req, res) => {
   if (status !== "COMPLETED") {
     return res.status(400).json({ ok: false, error: "payment_not_completed", message: "Payment not completed" })
   }
+  const amountNum = Number(amount)
+  if (!paymentId || !Number.isFinite(amountNum) || amountNum <= 0) {
+    return res.status(400).json({
+      ok: false,
+      error: "payment_not_verified",
+      message: "A verified payment ID and positive amount are required before confirming.",
+    })
+  }
   if (!barberName || !date || !time) {
     return res.status(400).json({ ok: false, error: "validation_failed", message: "barberName, date, time are required" })
   }

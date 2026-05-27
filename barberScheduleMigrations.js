@@ -122,7 +122,7 @@ export async function alignLegacyBarberFkColumns() {
         ON bookings (barber_id, date, time)
         WHERE booking_status = 'confirmed'
           AND is_paid_booking = true
-          AND payment_status IN ('paid', 'deposit_paid');
+          AND payment_status IN ('paid', 'paid_full', 'deposit_paid');
       `);
     }
     if (tableName === "barber_fee_ledger") {

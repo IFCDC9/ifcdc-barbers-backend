@@ -26,6 +26,8 @@ import {
   formatBookingDateTime,
   formatCreatedAt,
   formatMoney,
+  paymentMethodDisplayLabel,
+  paymentStatusHeadline,
 } from "../../utils/bookingDisplay";
 import { userFacingApiError } from "../../utils/userFacingApiError";
 import { theme } from "../../constants/theme";
@@ -192,12 +194,36 @@ export default function AdminBookingDetailScreen() {
 
       <ProfileCard style={styles.section}>
         <Text style={styles.sectionTitle}>Payment</Text>
-        <MetaRow label="Payment status" value={String(booking.payment_status || "pending").replace(/_/g, " ")} />
-        <MetaRow label="Summary" value={paymentSummary(booking)} />
+        <MetaRow
+          label="Payment status"
+          value={paymentStatusHeadline(
+            booking.payment_status,
+            booking.remaining_balance,
+            booking.amount_paid ?? booking.total_paid,
+          )}
+        />
+        <MetaRow label="Amount paid" value={formatMoney(booking.amount_paid ?? booking.total_paid)} />
+        <MetaRow label="Remaining balance" value={formatMoney(booking.remaining_balance)} />
+        <MetaRow label="Service price" value={formatMoney(booking.total_price ?? booking.amount)} />
         <MetaRow label="Platform fee" value={formatMoney(booking.platform_fee)} />
+        <MetaRow
+          label="Method"
+          value={paymentMethodDisplayLabel(
+            (booking as { payment_method?: string }).payment_method,
+            booking.payment_provider,
+          )}
+        />
+        <MetaRow label="Summary" value={paymentSummary(booking)} />
         <MetaRow label="Provider" value={booking.payment_provider || "—"} />
         <MetaRow label="PayPal order" value={booking.paypal_order_id || "—"} />
-        <MetaRow label="PayPal capture" value={booking.paypal_capture_id || "—"} />
+        <MetaRow
+          label="Transaction ID"
+          value={
+            booking.paypal_capture_id ||
+            (booking as { stripe_payment_intent_id?: string }).stripe_payment_intent_id ||
+            "—"
+          }
+        />
       </ProfileCard>
 
       <ProfileCard style={styles.section}>
