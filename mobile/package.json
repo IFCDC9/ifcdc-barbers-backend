@@ -68,6 +68,7 @@
     "@types/react": "~19.1.0",
     "eas-cli": "^18.9.1",
     "jest-worker": "29.7.0",
+    "patch-package": "^8.0.1",
     "typescript": "~5.9.2"
   },
   "overrides": {
