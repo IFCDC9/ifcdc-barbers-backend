@@ -19,6 +19,7 @@ import {
   resendBookingConfirmation,
   type AdminBookingDetail,
 } from "../../services/adminBookingApi";
+import { maskPhoneForDisplay } from "../../utils/redactPii";
 import {
   displayCustomerEmail,
   displayCustomerName,
@@ -175,7 +176,9 @@ export default function AdminBookingDetailScreen() {
         <Text style={styles.sectionTitle}>Customer</Text>
         <MetaRow label="Name" value={displayCustomerName(booking.customer_name, booking.customer_email)} />
         <MetaRow label="Email" value={customerEmail} />
-        {booking.phone ? <MetaRow label="Phone" value={String(booking.phone)} /> : null}
+        {booking.phone ? (
+          <MetaRow label="Phone" value={maskPhoneForDisplay(String(booking.phone))} />
+        ) : null}
       </ProfileCard>
 
       <ProfileCard style={styles.section}>

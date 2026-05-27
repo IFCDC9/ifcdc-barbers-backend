@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   ActivityIndicator,
   Alert,
@@ -187,6 +188,10 @@ export default function NotificationsScreen() {
   return (
     <ProfileScreenLayout title="Notifications" subtitle="Manage how we reach you">
       <ProfileCard style={styles.card}>
+        <Text style={styles.section}>{t("notifications.emailTitle")}</Text>
+        <Text style={styles.emailNote}>{t("notifications.emailBody")}</Text>
+      </ProfileCard>
+      <ProfileCard style={styles.card}>
         <Text style={styles.section}>Push notifications</Text>
         <View style={styles.statusRow}>
           <View style={{ flex: 1 }}>
@@ -332,6 +337,11 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     letterSpacing: 1.5,
     marginBottom: 8,
+  },
+  emailNote: {
+    color: theme.colors.textMuted,
+    fontSize: 14,
+    lineHeight: 20,
   },
   statusRow: {
     flexDirection: "row",

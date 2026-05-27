@@ -27,6 +27,7 @@ import { loadAdminUserAvatar } from "../../services/adminUserLocalStore";
 import { canEditUser } from "../../utils/userManagementAccess";
 import { userFacingApiError } from "../../utils/userFacingApiError";
 import { theme } from "../../constants/theme";
+import { maskPhoneForDisplay } from "../../utils/redactPii";
 
 export type UserDetailParams = { userId: string };
 
@@ -164,7 +165,7 @@ function UserDetailInner() {
         <MetaRow label="Role" value={formatUserRole(user.role)} />
         <MetaRow label="Status" value={user.status === "disabled" ? "Disabled" : "Active"} />
         <MetaRow label="Shop / business" value={business} />
-        <MetaRow label="Phone" value={user.phone || "—"} />
+        <MetaRow label="Phone" value={maskPhoneForDisplay(user.phone)} />
         <MetaRow label="Created" value={formatUserDate(user.createdAt)} />
         <MetaRow label="Last login" value={user.lastLogin ? formatUserDate(user.lastLogin) : "—"} />
       </ProfileCard>

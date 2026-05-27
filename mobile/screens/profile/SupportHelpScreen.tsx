@@ -17,7 +17,7 @@ const FAQ = [
   },
   {
     q: "What is AURA?",
-    a: "AURA is IFCDC’s in-app text assistant. Tap the glowing AURA button to ask questions about bookings and services.",
+    a: "AURA is IFCDC’s text assistant on the AURA tab. Ask about booking steps, services, payments, and policies. Use the Book tab to schedule and pay.",
   },
   {
     q: "Can I change or cancel a booking in the app?",

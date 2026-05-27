@@ -2,6 +2,7 @@ import Constants from "expo-constants";
 
 /**
  * Production API default — `EXPO_PUBLIC_API_URL` / `EXPO_PUBLIC_BACKEND_URL` override when set (Metro/.env).
+ * Locked to Render service `ifcdc-barbers-backend696` (stable TestFlight baseline).
  */
 export const PRODUCTION_API_BASE = "https://ifcdc-barbers-backend696.onrender.com";
 

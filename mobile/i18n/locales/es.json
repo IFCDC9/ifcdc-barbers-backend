@@ -234,6 +234,7 @@
   "profile": {
     "title": "Perfil",
     "settingsHeader": "Configuración",
+    "accountHeader": "Tu cuenta",
     "menuPersonalInfo": "Información personal",
     "menuBookings": "Mis reservas",
     "menuPaymentMethods": "Métodos de pago",
@@ -244,6 +245,10 @@
     "menuSignOut": "Cerrar sesión",
     "signOutConfirmTitle": "Cerrar sesión",
     "signOutConfirmBody": "Tendrás que iniciar sesión de nuevo para acceder a tus reservas."
+  },
+  "notifications": {
+    "emailTitle": "Correo de confirmación de reserva",
+    "emailBody": "Después de pagar con PayPal en la pestaña Reservar, IFCDC envía un correo de confirmación a la dirección de tu cuenta. Las alertas push de abajo son recordatorios opcionales."
   },
   "language": {
     "title": "Idioma",
@@ -256,11 +261,17 @@
   "aura": {
     "title": "AURA",
     "tagline": "Tu asistente de IFCDC",
-    "placeholder": "Pregúntale a AURA cualquier cosa sobre IFCDC…",
+    "placeholder": "Pregunta sobre reservas, servicios, pagos o políticas…",
     "sending": "Enviando…",
     "send": "Enviar",
     "reconnecting": "AURA se está reconectando temporalmente. Inténtalo de nuevo en un momento.",
-    "emptyHistory": "Dime qué necesitas — reservar, horarios, servicios o cómo llegar.",
+    "emptyHistory": "Haz una pregunta abajo — reservas, servicios, pagos, información de la tienda o políticas.",
+    "disclaimer": "AURA solo ofrece información. Para reservar o pagar, usa la pestaña Reservar — el pago no se hace en este chat.",
+    "promptBooking": "¿Cómo reservo una cita?",
+    "promptServices": "¿Qué servicios hay disponibles?",
+    "promptPayments": "¿Cómo funciona el pago con PayPal?",
+    "promptPolicies": "¿Cuál es la política de cancelación?",
+    "promptHours": "¿Cuál es el horario de la barbería?",
     "you": "Tú",
     "assistant": "AURA"
   },

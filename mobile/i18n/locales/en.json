@@ -233,7 +233,8 @@
   },
   "profile": {
     "title": "Profile",
-    "settingsHeader": "Settings",
+    "settingsHeader": "Account",
+    "accountHeader": "Your account",
     "menuPersonalInfo": "Personal info",
     "menuBookings": "My bookings",
     "menuPaymentMethods": "Payment methods",
@@ -244,6 +245,10 @@
     "menuSignOut": "Sign out",
     "signOutConfirmTitle": "Sign out",
     "signOutConfirmBody": "You'll need to sign in again to access your bookings."
+  },
+  "notifications": {
+    "emailTitle": "Booking confirmation email",
+    "emailBody": "After you pay with PayPal on the Book tab, IFCDC sends a confirmation email to the address on your account. Push alerts below are optional reminders."
   },
   "language": {
     "title": "Language",
@@ -256,11 +261,17 @@
   "aura": {
     "title": "AURA",
     "tagline": "Your IFCDC assistant",
-    "placeholder": "Ask AURA anything about IFCDC…",
+    "placeholder": "Ask about booking, services, payments, or policies…",
     "sending": "Sending…",
     "send": "Send",
     "reconnecting": "AURA is temporarily reconnecting. Please try again in a moment.",
-    "emptyHistory": "Tell me what you need — booking, hours, services, or directions.",
+    "emptyHistory": "Ask a question below — booking help, services, payments, shop info, or policies.",
+    "disclaimer": "AURA provides information only. To book or pay, use the Book tab — checkout is not handled in this chat.",
+    "promptBooking": "How do I book an appointment?",
+    "promptServices": "What services are available?",
+    "promptPayments": "How does PayPal payment work?",
+    "promptPolicies": "What is your cancellation policy?",
+    "promptHours": "What are your shop hours?",
     "you": "You",
     "assistant": "AURA"
   },

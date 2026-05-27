@@ -4,6 +4,8 @@ import {
   FlatList,
   KeyboardAvoidingView,
   Platform,
+  Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -14,7 +16,11 @@ import { useTranslation } from "react-i18next";
 import { theme } from "../constants/theme";
 import GlowButton from "./GlowButton";
 import ProfileCard from "./ProfileCard";
-import { sendAuraChatMessage, type AuraChatMessage } from "../services/auraChatApi";
+import {
+  sendAuraChatMessage,
+  type AuraChatMessage,
+  AURA_RECONNECT_MESSAGE,
+} from "../services/auraChatApi";
 
 type Msg = {
   id: string;
@@ -30,7 +36,20 @@ export default function AuraChatPanel() {
   const [messages, setMessages] = useState<Msg[]>([]);
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
+  const [lastFailedUserText, setLastFailedUserText] = useState<string | null>(null);
   const listRef = useRef<FlatList<Msg>>(null);
+
+  const suggestionKeys = useMemo(
+    () =>
+      [
+        "aura.promptBooking",
+        "aura.promptServices",
+        "aura.promptPayments",
+        "aura.promptPolicies",
+        "aura.promptHours",
+      ] as const,
+    [],
+  );
 
   const data = useMemo(() => messages, [messages]);
   const canSend = text.trim().length > 0 && !sending;
@@ -39,10 +58,7 @@ export default function AuraChatPanel() {
     setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 50);
   };
 
-  const send = async () => {
-    const trimmed = text.trim();
-    if (!trimmed || sending) return;
-
+  const postMessage = async (trimmed: string) => {
     const userMsg: Msg = { id: `u-${Date.now()}`, role: "user", content: trimmed };
     const nextThread: AuraChatMessage[] = [...messages, userMsg].map((m) => ({
       role: m.role,
@@ -50,9 +66,11 @@ export default function AuraChatPanel() {
     }));
 
     setMessages((prev) => [...prev, userMsg]);
-    setText("");
     setSending(true);
+    setLastFailedUserText(null);
     scrollToLatest();
+
+    console.log("[aura] send:", trimmed.slice(0, 80));
 
     const { reply } = await sendAuraChatMessage({
       message: trimmed,
@@ -60,9 +78,52 @@ export default function AuraChatPanel() {
       messages: nextThread,
     });
 
-    setMessages((prev) => [...prev, { id: `a-${Date.now()}`, role: "assistant", content: reply }]);
+    const failed =
+      !reply ||
+      reply === AURA_RECONNECT_MESSAGE ||
+      reply === t("aura.reconnecting");
+
+    if (failed) {
+      console.warn("[aura] reply unavailable — show retry");
+      setLastFailedUserText(trimmed);
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `a-err-${Date.now()}`,
+          role: "assistant",
+          content: t("aura.reconnecting"),
+        },
+      ]);
+    } else {
+      setMessages((prev) => [...prev, { id: `a-${Date.now()}`, role: "assistant", content: reply }]);
+    }
+
     setSending(false);
     scrollToLatest();
+  };
+
+  const send = async () => {
+    const trimmed = text.trim();
+    if (!trimmed || sending) return;
+    setText("");
+    await postMessage(trimmed);
+  };
+
+  const sendSuggestion = (key: (typeof suggestionKeys)[number]) => {
+    const q = t(key);
+    if (!q || sending) return;
+    void postMessage(q);
+  };
+
+  const retryLast = () => {
+    if (!lastFailedUserText || sending) return;
+    setMessages((prev) => {
+      const copy = [...prev];
+      if (copy.length && copy[copy.length - 1]?.role === "assistant") copy.pop();
+      if (copy.length && copy[copy.length - 1]?.content === lastFailedUserText) copy.pop();
+      return copy;
+    });
+    void postMessage(lastFailedUserText);
   };
 
   const renderItem = ({ item }: { item: Msg }) => {
@@ -117,6 +178,16 @@ export default function AuraChatPanel() {
           }
           onContentSizeChange={scrollToLatest}
         />
+
+        {lastFailedUserText ? (
+          <GlowButton
+            label={t("common.tryAgain")}
+            variant="outline"
+            onPress={retryLast}
+            disabled={sending}
+            style={styles.retryBtn}
+          />
+        ) : null}
 
         <View style={[styles.composer, { paddingBottom: Math.max(insets.bottom, 4) }]}>
           <TextInput
@@ -192,6 +263,18 @@ const styles = StyleSheet.create({
   welcomeTitle: { color: theme.colors.gold, fontSize: 16, fontWeight: "800" },
   emptyHint: { color: theme.colors.text, fontSize: 15, lineHeight: 22 },
   welcomeFoot: { color: theme.colors.textMuted, fontSize: 13, lineHeight: 18 },
+  suggestionRow: { gap: 8, paddingTop: 10, paddingRight: 8 },
+  suggestionChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "rgba(245,200,66,0.35)",
+    backgroundColor: "rgba(245,200,66,0.08)",
+  },
+  suggestionChipPressed: { backgroundColor: "rgba(245,200,66,0.16)" },
+  suggestionText: { color: theme.colors.gold, fontSize: 12, fontWeight: "700" },
+  retryBtn: { marginTop: 8, alignSelf: "flex-start" },
   typingRow: {
     flexDirection: "row",
     alignItems: "center",

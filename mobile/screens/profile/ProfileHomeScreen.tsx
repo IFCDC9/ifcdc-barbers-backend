@@ -6,9 +6,6 @@ import type { StackNavigationProp } from "@react-navigation/stack";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTranslation } from "react-i18next";
 import { useAuth } from "../../services/authContext";
-import { canManageSchedules } from "../../utils/scheduleAccess";
-import { canManageShops } from "../../utils/shopAccess";
-import { canAccessUserManagement } from "../../utils/userManagementAccess";
 import ProfileCard from "../../components/ProfileCard";
 import ProfileAmbientBackground from "../../components/ProfileAmbientBackground";
 import GlowButton from "../../components/GlowButton";
@@ -29,7 +26,7 @@ function initialsFrom(name: string, email: string): string {
 
 export default function ProfileHomeScreen() {
   const navigation = useNavigation<StackNavigationProp<ProfileStackParamList>>();
-  const { user, loading, signOut, token } = useAuth();
+  const { user, loading, signOut } = useAuth();
   const insets = useSafeAreaInsets();
   const bottomPad = profileHomeBottomPad(insets.bottom);
   const { t } = useTranslation();
@@ -48,23 +45,11 @@ export default function ProfileHomeScreen() {
   const avatarLetters = initialsFrom(user?.name || "", user?.email || "");
   const avatarUri = localAvatar || user?.profileImageUrl || null;
 
+  // Customer Profile only — shop/barber/admin tools live under the Admin tab.
   const menu: { key: keyof ProfileStackParamList; label: string }[] = [
     { key: "EditProfile", label: t("profile.menuPersonalInfo") },
     { key: "BookingHistory", label: t("profile.menuBookings") },
-    ...(canManageShops(user, token)
-      ? [{ key: "ShopRoster" as const, label: "Platform Shops" }]
-      : []),
-    ...(canManageSchedules(user, token)
-      ? [
-          { key: "BarberRoster" as const, label: "Barber Roster" },
-          { key: "ScheduleControls" as const, label: "Schedule Controls" },
-        ]
-      : []),
-    ...(canAccessUserManagement(user, token)
-      ? [{ key: "ViewAllUsers" as const, label: "User Management" }]
-      : []),
     { key: "Notifications", label: t("profile.menuNotifications") },
-    { key: "PaymentMethods", label: t("profile.menuPaymentMethods") },
     { key: "LanguageSettings", label: t("profile.menuLanguage") },
     { key: "SupportHelp", label: t("profile.menuSupport") },
     { key: "LegalPolicies", label: t("profile.menuLegal") },
@@ -79,7 +64,7 @@ export default function ProfileHomeScreen() {
         showsVerticalScrollIndicator={false}
       >
         <Text style={styles.screenTitle}>{t("profile.title")}</Text>
-        <Text style={styles.screenSub}>{t("profile.settingsHeader")}</Text>
+        <Text style={styles.screenSub}>{t("profile.accountHeader")}</Text>
 
         <ProfileCard style={styles.headerCard}>
           {avatarUri ? (

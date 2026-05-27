@@ -77,7 +77,7 @@ export default function BookingHistoryScreen({ standalone = false }: { standalon
       standalone={standalone}
     >
       {loading ? <ScreenLoading /> : null}
-      {error ? <ScreenError message={error} /> : null}
+      {error ? <ScreenError message={error} onRetry={load} /> : null}
       {!loading && !error && rows.length === 0 ? (
         <ScreenEmpty message={UX.emptyAppointments} />
       ) : null}

@@ -70,6 +70,7 @@ export async function sendAuraChatMessage(input: {
 
   for (const path of paths) {
     const url = apiFullUrl(path);
+    console.log("AURA API:", url);
     try {
       const res = await fetch(url, {
         method: "POST",
@@ -80,6 +81,8 @@ export async function sendAuraChatMessage(input: {
         },
         body: JSON.stringify(body),
       });
+
+      console.log("AURA RESPONSE:", res.status);
 
       if (res.status === 404) {
         continue;
@@ -96,6 +99,7 @@ export async function sendAuraChatMessage(input: {
 
       const reply = String(json.message || json.reply || "").trim();
       if (reply) {
+        console.log("AURA DATA:", reply.slice(0, 120));
         return {
           reply,
           action: typeof json.action === "string" ? json.action : undefined,
