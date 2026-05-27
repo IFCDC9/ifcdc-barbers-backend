@@ -20,6 +20,7 @@ import {
   validateSubscriptionMonthlyPrice,
 } from "./subscriptionTier.js";
 import { logServiceAudit, logServiceUpdateDiff } from "./serviceAuditLog.js";
+import { writeSecurityAudit } from "./auditSecurity.js";
 
 function actorFromReq(req) {
   return {
@@ -927,6 +928,13 @@ export function createBarberBusinessRouter({ uploadDir } = {}) {
         req.barberId,
       ]);
       if (!r.rows?.length) return res.status(404).json({ error: "not_found", message: "Media not found" });
+      void writeSecurityAudit({
+        eventType: "media_deleted",
+        actorUserId: req.user?.id ? String(req.user.id) : null,
+        actorEmail: req.user?.email || null,
+        req,
+        metadata: { mediaId: id, barberId: req.barberId, action: "media_deleted" },
+      });
       return res.json({ ok: true, id: r.rows[0].id });
     } catch (e) {
       console.error("[barber-business] DELETE media:", e);

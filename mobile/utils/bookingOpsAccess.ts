@@ -48,6 +48,37 @@ export function bookingPaymentDisplayStatus(booking: {
   return status || "unpaid";
 }
 
+/** Customer/barber/shop may remove unpaid or refunded rows from history (not active paid captures). */
+export function canUserRemoveBookingFromHistory(booking: {
+  payment_status?: string | null;
+  paypal_capture_id?: string | null;
+  amount_paid?: number | string | null;
+  amount_charged?: number | string | null;
+  total_paid?: number | string | null;
+}): boolean {
+  const status = String(booking.payment_status || "unpaid").toLowerCase();
+  if (REFUNDED_STATUSES.has(status) || status === "refunded" || status === "partially_refunded") {
+    return true;
+  }
+  if (status === "refund_pending") return false;
+  const capture = String(booking.paypal_capture_id || "").trim();
+  const paid = Number(booking.amount_charged ?? booking.amount_paid ?? booking.total_paid ?? 0);
+  if (capture && paid > 0.01) return false;
+  if (["paid", "paid_full", "deposit_paid"].includes(status) && paid > 0.01) return false;
+  return true;
+}
+
+export function bookingRemovalBlockedMessage(booking: {
+  payment_status?: string | null;
+  paypal_capture_id?: string | null;
+}): string {
+  const status = String(booking.payment_status || "").toLowerCase();
+  if (status === "refund_pending") {
+    return "A refund is in progress. Try again after it completes.";
+  }
+  return "This booking has a payment on file. Cancel the appointment first. Refunds are handled separately.";
+}
+
 export function canShowRefundClientButton(booking: {
   payment_status?: string | null;
   paypal_capture_id?: string | null;

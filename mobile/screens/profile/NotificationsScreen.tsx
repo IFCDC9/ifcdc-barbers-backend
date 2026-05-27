@@ -5,6 +5,7 @@ import {
   Alert,
   Linking,
   Platform,
+  Pressable,
   StyleSheet,
   Switch,
   Text,
@@ -28,6 +29,14 @@ import {
 } from "../../services/pushApi";
 import { theme } from "../../constants/theme";
 import { userFacingApiError } from "../../utils/userFacingApiError";
+import { confirmDelete } from "../../utils/confirmDelete";
+import {
+  appendNotificationFeed,
+  clearNotificationFeed,
+  loadNotificationFeed,
+  removeNotificationFeedItem,
+  type NotificationFeedItem,
+} from "../../services/notificationFeedStore";
 
 function PrefRow({
   label,
@@ -81,6 +90,7 @@ export default function NotificationsScreen() {
   const [busy, setBusy] = useState(false);
   const [pushState, setPushState] = useState<NotificationDebugState | null>(null);
   const [testing, setTesting] = useState(false);
+  const [feed, setFeed] = useState<NotificationFeedItem[]>([]);
   const initialLoad = useRef(true);
 
   const refreshPushStatus = useCallback(async () => {
@@ -137,6 +147,14 @@ export default function NotificationsScreen() {
       await triggerLocalTestNotificationAsync().catch(() => undefined);
       // 2. Server-side push via Expo for end-to-end verification.
       const result = await sendServerTestPush();
+      await appendNotificationFeed({
+        title: "Test notification",
+        body:
+          result.sent > 0
+            ? `Sent to ${result.sent} device(s).`
+            : result.message || "Test alert",
+      });
+      setFeed(await loadNotificationFeed());
       Alert.alert(
         "Test notification",
         result.sent > 0
@@ -192,6 +210,45 @@ export default function NotificationsScreen() {
         <Text style={styles.section}>{t("notifications.emailTitle")}</Text>
         <Text style={styles.emailNote}>{t("notifications.emailBody")}</Text>
       </ProfileCard>
+      {feed.length > 0 ? (
+        <ProfileCard style={styles.card}>
+          <View style={styles.feedHeader}>
+            <Text style={styles.section}>Recent alerts</Text>
+            <Pressable
+              onPress={() => {
+                void (async () => {
+                  if (!(await confirmDelete("Clear all recent alerts on this device?"))) return;
+                  await clearNotificationFeed();
+                  setFeed([]);
+                })();
+              }}
+            >
+              <Text style={styles.clearFeed}>Clear all</Text>
+            </Pressable>
+          </View>
+          {feed.map((item) => (
+            <View key={item.id} style={styles.feedRow}>
+              <View style={styles.feedCopy}>
+                <Text style={styles.feedTitle}>{item.title}</Text>
+                <Text style={styles.feedBody}>{item.body}</Text>
+              </View>
+              <Pressable
+                onPress={() => {
+                  void (async () => {
+                    if (!(await confirmDelete())) return;
+                    await removeNotificationFeedItem(item.id);
+                    setFeed(await loadNotificationFeed());
+                  })();
+                }}
+                hitSlop={8}
+              >
+                <Text style={styles.feedDelete}>Delete</Text>
+              </Pressable>
+            </View>
+          ))}
+        </ProfileCard>
+      ) : null}
+
       <ProfileCard style={styles.card}>
         <Text style={styles.section}>Push notifications</Text>
         <View style={styles.statusRow}>
@@ -383,4 +440,23 @@ const styles = StyleSheet.create({
   rowLabel: { color: theme.colors.text, fontSize: 16, fontWeight: "600" },
   rowLabelDisabled: { color: theme.colors.textMuted },
   rowDesc: { color: theme.colors.textMuted, fontSize: 13, lineHeight: 18, marginTop: 4 },
+  feedHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 8,
+  },
+  clearFeed: { color: theme.colors.textMuted, fontSize: 13, fontWeight: "700" },
+  feedRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10,
+    paddingVertical: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: "rgba(255,255,255,0.08)",
+  },
+  feedCopy: { flex: 1, gap: 4 },
+  feedTitle: { color: theme.colors.text, fontSize: 15, fontWeight: "700" },
+  feedBody: { color: theme.colors.textMuted, fontSize: 13, lineHeight: 18 },
+  feedDelete: { color: "#e57373", fontSize: 13, fontWeight: "700" },
 });

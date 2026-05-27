@@ -23,7 +23,7 @@ import { BARBER_PLATFORM_FEE_USD, barberDepositsEffective } from "./subscription
 import { insertBarberFeeLedgerRow } from "./barberFeeLedger.js";
 import { createDepositPaymentLink } from "./depositPaymentLink.js";
 import { tenantMatches } from "./securityPolicy.js";
-import { createPlatformBookingOpsGuard } from "./bookingsAdminGuard.js";
+import { createPlatformBookingOpsGuard, isPlatformBookingOpsJwt } from "./bookingsAdminGuard.js";
 import { writeSecurityAudit } from "./auditSecurity.js";
 import { createRequire } from "node:module";
 
@@ -45,6 +45,7 @@ const {
 } = require("./bookingPaymentSettlement.cjs");
 const { refundPayPalCapture, round2: roundRefundMoney } = require("./paypalRefund.cjs");
 const { sendBookingRefundEmail } = require("./bookingEmail.cjs");
+const { assessBookingRemoval } = require("./bookingDeletePolicy.cjs");
 
 const BOOKING_ACTIVE = "deleted_at IS NULL";
 const BOOKING_ACTIVE_B = "b.deleted_at IS NULL";
@@ -557,6 +558,98 @@ export function createBookingsRouter({ sendBookingEmail, sendBookingPush, requir
     } catch (e) {
       console.error("[booking] /api/bookings/:id failed:", e?.stack || e);
       return res.status(500).json({ ok: false, message: "Could not load booking" });
+    }
+  });
+
+  /**
+   * DELETE /api/bookings/:id
+   * Soft-delete for customers, barbers, shop owners, and platform admins.
+   * Paid bookings with a PayPal capture cannot be removed until refund/cancel policy is satisfied.
+   */
+  router.delete("/api/bookings/:id", requireAuth, async (req, res) => {
+    try {
+      const id = String(req.params.id || "").trim();
+      if (!id) return res.status(400).json({ ok: false, message: "Booking id required" });
+
+      const reason =
+        typeof req.body?.reason === "string" && req.body.reason.trim()
+          ? req.body.reason.trim().slice(0, 500)
+          : "Removed from history";
+
+      const r = await dbQuery(
+        `${BOOKING_DETAIL_SELECT} WHERE b.id = $1::uuid AND ${BOOKING_ACTIVE_B} LIMIT 1`,
+        [id],
+      );
+      const booking = r.rows?.[0] || null;
+      if (!booking) return res.status(404).json({ ok: false, message: "Booking not found" });
+
+      const actor = await resolveBookingActor(req, booking);
+      if (!actor) return res.status(404).json({ ok: false, message: "Booking not found" });
+
+      const forceAdmin = isPlatformBookingOpsJwt(req.user);
+      const assessment = assessBookingRemoval(booking, { forceAdmin });
+      if (!assessment.allowed) {
+        return res.status(409).json({
+          ok: false,
+          code: assessment.code || "cannot_delete",
+          message: assessment.message || "This booking cannot be removed.",
+        });
+      }
+
+      const actorId = actor.userId || null;
+      const actorRole = actor.role || "customer";
+
+      const upd = await dbQuery(
+        `UPDATE bookings SET
+           deleted_at = NOW(),
+           deleted_by = $2,
+           delete_reason = $3,
+           booking_status = 'cancelled',
+           is_paid_booking = false,
+           cancelled_at = COALESCE(cancelled_at, NOW()),
+           cancelled_by = COALESCE(cancelled_by, $4)
+         WHERE id = $1::uuid AND deleted_at IS NULL
+         RETURNING id, deleted_at, booking_status`,
+        [id, actorId || actorRole, reason, actorRole],
+      );
+      if (!upd.rows?.length) {
+        return res.status(404).json({ ok: false, message: "Booking not found or already removed" });
+      }
+
+      await recordStatusChange({
+        bookingId: id,
+        previousStatus: String(booking.booking_status || "").toLowerCase(),
+        newStatus: "cancelled",
+        actor: actor.actor,
+        note: `[removed] ${reason}`,
+      });
+
+      void writeSecurityAudit({
+        eventType: "booking_deleted",
+        actorUserId: actorId,
+        actorEmail: req.user?.email || null,
+        req,
+        metadata: {
+          bookingId: id,
+          action: "delete",
+          reason,
+          scope: forceAdmin ? "platform_admin" : actorRole,
+          barberId: booking.barber_id,
+          paymentStatus: booking.payment_status,
+        },
+      });
+
+      void dispatchBookingPush({
+        booking,
+        kind: "booking_cancelled",
+        audience: ["customer", "barber", "shop_owners"],
+        data: { bookingId: id, deleted: true },
+      });
+
+      return res.json({ ok: true, message: "Booking removed from your history.", deleted: true });
+    } catch (e) {
+      console.error("[booking] DELETE /api/bookings/:id failed:", e?.stack || e);
+      return res.status(500).json({ ok: false, message: "Could not remove booking" });
     }
   });
 

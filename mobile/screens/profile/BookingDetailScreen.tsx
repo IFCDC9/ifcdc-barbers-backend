@@ -15,6 +15,7 @@ import GlowButton from "../../components/GlowButton";
 import BookingStatusBadge from "../../components/BookingStatusBadge";
 import {
   fetchBookingById,
+  removeBookingFromHistory,
   type BookingDetail,
 } from "../../services/bookingDetailApi";
 import {
@@ -331,6 +332,9 @@ export default function BookingDetailScreen() {
   const showRefundClient = Boolean(
     booking && canDestructive && canShowRefundClientButton(booking),
   );
+  const canRemoveFromHistory = Boolean(
+    booking && !canDestructive && canUserRemoveBookingFromHistory(booking),
+  );
   const canViewReceipt = true;
 
   const updateStatus = useCallback(
@@ -492,6 +496,28 @@ export default function BookingDetailScreen() {
         },
       ],
     );
+  };
+
+  const onRemoveFromHistory = () => {
+    if (!booking) return;
+    if (!canUserRemoveBookingFromHistory(booking)) {
+      Alert.alert("Cannot remove", bookingRemovalBlockedMessage(booking));
+      return;
+    }
+    void (async () => {
+      if (!(await confirmDelete())) return;
+      setBusy(true);
+      try {
+        const result = await removeBookingFromHistory(bookingId);
+        Alert.alert("Removed", result.message, [
+          { text: "OK", onPress: () => navigation.goBack() },
+        ]);
+      } catch (e) {
+        Alert.alert("Remove failed", userFacingApiError(e));
+      } finally {
+        setBusy(false);
+      }
+    })();
   };
 
   const onDeleteBooking = () => {
@@ -828,6 +854,14 @@ export default function BookingDetailScreen() {
             label="Refund Client"
             variant="danger"
             onPress={onRefundClient}
+            disabled={busy}
+          />
+        ) : null}
+        {canRemoveFromHistory ? (
+          <GlowButton
+            label="Remove from history"
+            variant="danger"
+            onPress={onRemoveFromHistory}
             disabled={busy}
           />
         ) : null}

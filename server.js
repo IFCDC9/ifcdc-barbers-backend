@@ -49,6 +49,9 @@ import { attachAuraVoiceRoutes, attachAuraSmsWebhook } from "./auraVoiceRoutes.j
 import { getPublicApiBaseUrl } from "./auraVoiceReply.js";
 import { ssmlThanksCallingOpener } from "./auraVoiceSsml.js";
 import { handleTwilioSmsStatusCallback } from "./voiceBookingSms.js";
+import { ensureAuraMemoryTables } from "./auraMemoryMigrations.js";
+import { createAuraChatHistoryRouter } from "./auraChatHistoryRoutes.js";
+import { requireAuth } from "./authRoutes.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -341,6 +344,8 @@ function summarizeAuthRouterPaths(router) {
 
 // Auth (JWT + password reset via Resend) — mount early, before other `/api/*` routers and the JSON 404.
 const authRouter = createAuthRouter({ sendEmail });
+app.use("/api/aura", createAuraChatHistoryRouter({ requireAuth }));
+console.log("[boot] mounted /api/aura/messages (GET, DELETE)");
 // Explicit surface: some deployments/proxies mis-handle nested GET registration; this always reaches `router.get("/me", …)`.
 app.get("/api/auth/me", (req, res, next) => {
   const saved = req.url;
@@ -961,6 +966,7 @@ async function startServer() {
     await ensureBookingStatusHistoryTable();
     await ensurePushNotificationsSchema();
     await ensureLegalAcceptanceSchema();
+    await ensureAuraMemoryTables();
   } catch (e) {
     console.error("[migrate] bookings failed:", e?.message || e);
   }

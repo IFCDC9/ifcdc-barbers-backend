@@ -28,6 +28,8 @@ const BOOKING_EVENT_TYPES = new Set([
   "booking_deleted",
 ]);
 
+const CONTENT_EVENT_TYPES = new Set(["message_deleted", "notification_deleted", "media_deleted"]);
+
 const USER_EVENT_TYPES = new Set([
   "invite_sent",
   "invite_revoked",
@@ -60,7 +62,10 @@ function formatAction(eventType) {
     user_created: "User account created",
     booking_cancel_admin: "Booking cancelled by admin",
     booking_create_admin: "Booking created by admin",
-    booking_deleted: "Booking deleted by admin",
+    booking_deleted: "Booking deleted",
+    message_deleted: "AURA message deleted",
+    notification_deleted: "Notification removed",
+    media_deleted: "Media deleted",
   };
   return map[eventType] || String(eventType || "Platform event").replace(/_/g, " ");
 }
@@ -72,6 +77,7 @@ function categorizeEvent(eventType) {
   }
   if (PAYMENT_EVENT_TYPES.has(t)) return "payments";
   if (BOOKING_EVENT_TYPES.has(t)) return "bookings";
+  if (CONTENT_EVENT_TYPES.has(t)) return "admin";
   if (USER_EVENT_TYPES.has(t)) return "users";
   if (ADMIN_EVENT_TYPES.has(t)) return "admin";
   if (t.includes("payment")) return "payments";

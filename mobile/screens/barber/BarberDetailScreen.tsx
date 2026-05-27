@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Alert, Pressable, StyleSheet, Text, View } from "react-native";
 import { useNavigation, useRoute } from "@react-navigation/native";
 import type { RouteProp } from "@react-navigation/native";
 import type { StackNavigationProp } from "@react-navigation/stack";
@@ -15,7 +15,17 @@ import {
   type BarberServiceRow,
 } from "../../services/barberStaffApi";
 import { fetchBarberSchedule } from "../../services/barberScheduleApi";
+import { deleteAdminBooking } from "../../services/adminBookingApi";
+import { removeBookingFromHistory } from "../../services/bookingDetailApi";
 import { fetchAdminBookings, type BookingRow } from "../../services/profileApi";
+import { useAuth } from "../../services/authContext";
+import { confirmDelete } from "../../utils/confirmDelete";
+import {
+  bookingRemovalBlockedMessage,
+  canPerformBookingDestructiveOps,
+  canUserRemoveBookingFromHistory,
+} from "../../utils/bookingOpsAccess";
+import { userFacingApiError } from "../../utils/userFacingApiError";
 import { summarizeSchedule } from "../../utils/scheduleModel";
 import {
   displayCustomerName,
@@ -67,6 +77,8 @@ function BarberDetailInner() {
   const navigation = useNavigation<StackNavigationProp<NavParams>>();
   const route = useRoute<DetailRoute>();
   const { barberId, barberName } = route.params;
+  const { user, token } = useAuth();
+  const canAdminDelete = canPerformBookingDestructiveOps(user, token);
 
   const [loading, setLoading] = useState(true);
   const [profile, setProfile] = useState<BarberProfile | null>(null);
@@ -123,6 +135,33 @@ function BarberDetailInner() {
 
   const displayName = profile?.name || barberName;
   const visibleBookings = showAllBookings ? bookings : bookings.slice(0, 5);
+
+  const removeBookingRow = useCallback(
+    async (b: BookingRow) => {
+      if (canAdminDelete) {
+        if (!(await confirmDelete())) return;
+        try {
+          await deleteAdminBooking(String(b.id));
+          await load();
+        } catch (e) {
+          Alert.alert("Delete failed", userFacingApiError(e));
+        }
+        return;
+      }
+      if (!canUserRemoveBookingFromHistory(b)) {
+        Alert.alert("Cannot remove", bookingRemovalBlockedMessage(b));
+        return;
+      }
+      if (!(await confirmDelete())) return;
+      try {
+        await removeBookingFromHistory(String(b.id));
+        await load();
+      } catch (e) {
+        Alert.alert("Remove failed", userFacingApiError(e));
+      }
+    },
+    [canAdminDelete, load],
+  );
 
   return (
     <ProfileScreenLayout title={displayName} subtitle="Barber detail">
@@ -181,6 +220,7 @@ function BarberDetailInner() {
                   onPress={() =>
                     navigation.navigate("BookingDetail", { bookingId: String(b.id) })
                   }
+                  onLongPress={() => void removeBookingRow(b)}
                   style={({ pressed }) => [styles.bookingRow, pressed && styles.bookingRowPressed]}
                   accessibilityRole="button"
                   accessibilityLabel={`Open booking ${b.service || "appointment"}`}

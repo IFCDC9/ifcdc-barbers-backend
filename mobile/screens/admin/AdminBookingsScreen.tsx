@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Alert, Pressable, StyleSheet, Text, View } from "react-native";
 import { ScreenLoading, ScreenEmpty, ScreenError } from "../../components/LoadingState";
 import { useNavigation, useRoute } from "@react-navigation/native";
 import type { RouteProp } from "@react-navigation/native";
@@ -7,7 +7,11 @@ import type { StackNavigationProp } from "@react-navigation/stack";
 import ProfileScreenLayout from "../../components/ProfileScreenLayout";
 import ProfileCard from "../../components/ProfileCard";
 import BookingStatusBadge from "../../components/BookingStatusBadge";
+import { deleteAdminBooking } from "../../services/adminBookingApi";
 import { fetchAdminBookings, type BookingRow } from "../../services/profileApi";
+import { useAuth } from "../../services/authContext";
+import { confirmDelete } from "../../utils/confirmDelete";
+import { canPerformBookingDestructiveOps } from "../../utils/bookingOpsAccess";
 import { userFacingApiError } from "../../utils/userFacingApiError";
 import {
   displayCustomerEmail,
@@ -34,6 +38,7 @@ function BookingCard({
   return (
     <Pressable
       onPress={onPress}
+      onLongPress={onDelete}
       style={({ pressed }) => [pressed && styles.cardPressed]}
       accessibilityRole="button"
       accessibilityLabel={`Open booking for ${row.service || "appointment"}`}
@@ -67,6 +72,8 @@ function BookingCard({
 export default function AdminBookingsScreen() {
   const navigation = useNavigation<Nav>();
   const route = useRoute<BookingsRoute>();
+  const { user, token } = useAuth();
+  const canAdminDelete = canPerformBookingDestructiveOps(user, token);
   const filterBarberId = route.params?.barberId;
   const filterBarberName = route.params?.barberName;
   const [rows, setRows] = useState<BookingRow[]>([]);
@@ -105,6 +112,20 @@ export default function AdminBookingsScreen() {
     ? `Bookings for ${filterBarberName}`
     : "Platform-wide booking management";
 
+  const deleteRow = useCallback(
+    async (row: BookingRow) => {
+      if (!canAdminDelete) return;
+      if (!(await confirmDelete())) return;
+      try {
+        await deleteAdminBooking(String(row.id));
+        await load();
+      } catch (e) {
+        Alert.alert("Delete failed", userFacingApiError(e));
+      }
+    },
+    [canAdminDelete, load],
+  );
+
   return (
     <ProfileScreenLayout title="Bookings" subtitle={subtitle}>
       {loading ? <ScreenLoading /> : null}
@@ -118,6 +139,7 @@ export default function AdminBookingsScreen() {
             onPress={() =>
               navigation.navigate("AdminBookingDetail", { bookingId: String(row.id) })
             }
+            onDelete={canAdminDelete ? () => void deleteRow(row) : undefined}
           />
         ))}
       </View>

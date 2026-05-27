@@ -17,6 +17,7 @@ import {
 } from "../../services/barberStaffApi";
 import { apiFullUrl } from "../../constants/config";
 import { userFacingApiError } from "../../utils/userFacingApiError";
+import { confirmDelete } from "../../utils/confirmDelete";
 import { theme } from "../../constants/theme";
 import ShareButton from "../../components/ShareButton";
 import {
@@ -143,26 +144,16 @@ function BarberServicesInner() {
     void load();
   }, [load]);
 
-  const confirmDelete = (service: BarberServiceRow) => {
-    Alert.alert(
-      "Delete service?",
-      `"${service.name}" will be permanently removed from this menu.`,
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Delete",
-          style: "destructive",
-          onPress: async () => {
-            try {
-              await deleteBarberService(barberId, service.id);
-              await load();
-            } catch (e) {
-              Alert.alert("Delete failed", userFacingApiError(e));
-            }
-          },
-        },
-      ],
-    );
+  const onDeleteService = (service: BarberServiceRow) => {
+    void (async () => {
+      if (!(await confirmDelete(`Remove "${service.name}" from your menu?`))) return;
+      try {
+        await deleteBarberService(barberId, service.id);
+        await load();
+      } catch (e) {
+        Alert.alert("Delete failed", userFacingApiError(e));
+      }
+    })();
   };
 
   const confirmArchive = (service: BarberServiceRow) => {
@@ -217,7 +208,7 @@ function BarberServicesInner() {
               }
               onToggle={(active) => void toggleActive(s, active)}
               onArchive={() => confirmArchive(s)}
-              onDelete={() => confirmDelete(s)}
+              onDelete={() => onDeleteService(s)}
             />
           ))
         : null}

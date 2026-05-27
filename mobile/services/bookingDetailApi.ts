@@ -45,6 +45,18 @@ function shouldUseListFallback(e: unknown): boolean {
  * unavailable on an older deploy. Customers get nothing back from the fallback,
  * which matches the desired "404 = not yours" behavior.
  */
+export async function removeBookingFromHistory(
+  bookingId: string,
+  reason?: string,
+): Promise<{ message: string }> {
+  const res = await apiFetch(`/api/bookings/${encodeURIComponent(bookingId)}`, {
+    method: "DELETE",
+    body: JSON.stringify({ reason: reason || "Removed from history" }),
+  });
+  const json = (await res.json()) as { message?: string };
+  return { message: json.message || "Booking removed from your history." };
+}
+
 export async function fetchBookingById(bookingId: string): Promise<BookingDetail | null> {
   try {
     const res = await apiFetch(`/api/bookings/${encodeURIComponent(bookingId)}`);

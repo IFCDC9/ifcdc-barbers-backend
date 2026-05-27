@@ -1,13 +1,13 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   Animated,
   Easing,
   FlatList,
   KeyboardAvoidingView,
   Platform,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -18,22 +18,32 @@ import { useTranslation } from "react-i18next";
 import { theme } from "../constants/theme";
 import GlowButton from "./GlowButton";
 import ProfileCard from "./ProfileCard";
+import { useAuth } from "../services/authContext";
 import {
   sendAuraChatMessage,
   type AuraChatMessage,
   AURA_RECONNECT_MESSAGE,
 } from "../services/auraChatApi";
+import {
+  clearAuraChatMessages,
+  loadAuraChatMessages,
+  saveAuraChatMessages,
+  type StoredAuraMessage,
+} from "../services/auraChatStore";
+import {
+  clearAuraConversationOnServer,
+  deleteAuraMessageOnServer,
+} from "../services/auraChatHistoryApi";
+import { confirmDelete } from "../utils/confirmDelete";
 
-type Msg = {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-};
+type Msg = StoredAuraMessage;
 
 /** Embedded text-only AURA chat (no modal, no voice). */
 export default function AuraChatPanel() {
   const insets = useSafeAreaInsets();
   const { t } = useTranslation();
+  const { user } = useAuth();
+  const userId = user?.id ? String(user.id) : null;
   const [conversationId] = useState(() => `ai-${Date.now()}`);
   const [messages, setMessages] = useState<Msg[]>([]);
   const [text, setText] = useState("");
@@ -41,6 +51,19 @@ export default function AuraChatPanel() {
   const [lastFailedUserText, setLastFailedUserText] = useState<string | null>(null);
   const listRef = useRef<FlatList<Msg>>(null);
   const glow = useRef(new Animated.Value(0.35)).current;
+
+  const persistMessages = useCallback(
+    async (next: Msg[]) => {
+      await saveAuraChatMessages(userId, next);
+    },
+    [userId],
+  );
+
+  useEffect(() => {
+    void loadAuraChatMessages(userId).then((stored) => {
+      if (stored.length) setMessages(stored);
+    });
+  }, [userId]);
 
   useEffect(() => {
     const pulse = Animated.loop(
@@ -72,24 +95,23 @@ export default function AuraChatPanel() {
     outputRange: [1, 1.12],
   });
 
-  const suggestionKeys = useMemo(
-    () =>
-      [
-        "aura.promptBooking",
-        "aura.promptServices",
-        "aura.promptPayments",
-        "aura.promptPolicies",
-        "aura.promptHours",
-      ] as const,
-    [],
-  );
-
   const data = useMemo(() => messages, [messages]);
   const canSend = text.trim().length > 0 && !sending;
 
   const scrollToLatest = () => {
     setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 50);
   };
+
+  const applyMessages = useCallback(
+    (updater: (prev: Msg[]) => Msg[]) => {
+      setMessages((prev) => {
+        const next = updater(prev);
+        void persistMessages(next);
+        return next;
+      });
+    },
+    [persistMessages],
+  );
 
   const postMessage = async (trimmed: string) => {
     const userMsg: Msg = { id: `u-${Date.now()}`, role: "user", content: trimmed };
@@ -98,12 +120,10 @@ export default function AuraChatPanel() {
       content: m.content,
     }));
 
-    setMessages((prev) => [...prev, userMsg]);
+    applyMessages((prev) => [...prev, userMsg]);
     setSending(true);
     setLastFailedUserText(null);
     scrollToLatest();
-
-    console.log("[aura] send:", trimmed.slice(0, 80));
 
     const { reply } = await sendAuraChatMessage({
       message: trimmed,
@@ -117,9 +137,8 @@ export default function AuraChatPanel() {
       reply === t("aura.reconnecting");
 
     if (failed) {
-      console.warn("[aura] reply unavailable — show retry");
       setLastFailedUserText(trimmed);
-      setMessages((prev) => [
+      applyMessages((prev) => [
         ...prev,
         {
           id: `a-err-${Date.now()}`,
@@ -128,7 +147,10 @@ export default function AuraChatPanel() {
         },
       ]);
     } else {
-      setMessages((prev) => [...prev, { id: `a-${Date.now()}`, role: "assistant", content: reply }]);
+      applyMessages((prev) => [
+        ...prev,
+        { id: `a-${Date.now()}`, role: "assistant", content: reply },
+      ]);
     }
 
     setSending(false);
@@ -142,15 +164,9 @@ export default function AuraChatPanel() {
     await postMessage(trimmed);
   };
 
-  const sendSuggestion = (key: (typeof suggestionKeys)[number]) => {
-    const q = t(key);
-    if (!q || sending) return;
-    void postMessage(q);
-  };
-
   const retryLast = () => {
     if (!lastFailedUserText || sending) return;
-    setMessages((prev) => {
+    applyMessages((prev) => {
       const copy = [...prev];
       if (copy.length && copy[copy.length - 1]?.role === "assistant") copy.pop();
       if (copy.length && copy[copy.length - 1]?.content === lastFailedUserText) copy.pop();
@@ -159,12 +175,54 @@ export default function AuraChatPanel() {
     void postMessage(lastFailedUserText);
   };
 
+  const deleteMessage = (id: string) => {
+    void (async () => {
+      if (!(await confirmDelete())) return;
+      applyMessages((prev) => prev.filter((m) => m.id !== id));
+      if (userId && !id.startsWith("u-") && !id.startsWith("a-")) {
+        try {
+          await deleteAuraMessageOnServer(id);
+        } catch {
+          // Local-only ids are fine without server sync.
+        }
+      }
+    })();
+  };
+
+  const clearConversation = () => {
+    Alert.alert("Clear conversation", "Are you sure you want to delete this?", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Clear all",
+        style: "destructive",
+        onPress: () => {
+          void (async () => {
+            setMessages([]);
+            setLastFailedUserText(null);
+            await clearAuraChatMessages(userId);
+            if (userId) {
+              try {
+                await clearAuraConversationOnServer();
+              } catch {
+                // Offline — local clear still applies.
+              }
+            }
+          })();
+        },
+      },
+    ]);
+  };
+
   const renderItem = ({ item }: { item: Msg }) => {
     const isUser = item.role === "user";
     return (
-      <View style={[styles.bubble, isUser ? styles.bubbleUser : styles.bubbleAi]}>
+      <Pressable
+        onLongPress={() => deleteMessage(item.id)}
+        delayLongPress={400}
+        style={[styles.bubble, isUser ? styles.bubbleUser : styles.bubbleAi]}
+      >
         <Text style={[styles.bubbleText, isUser ? styles.userText : styles.aiText]}>{item.content}</Text>
-      </View>
+      </Pressable>
     );
   };
 
@@ -192,6 +250,11 @@ export default function AuraChatPanel() {
           <Text style={styles.title}>{t("aura.title")}</Text>
           <Text style={styles.subtitle}>{t("aura.tagline")}</Text>
         </View>
+        {messages.length > 0 ? (
+          <Pressable onPress={clearConversation} hitSlop={8} accessibilityRole="button">
+            <Text style={styles.clearLink}>Clear</Text>
+          </Pressable>
+        ) : null}
       </View>
 
       <ProfileCard style={styles.chatCard}>
@@ -294,6 +357,12 @@ const styles = StyleSheet.create({
     letterSpacing: 1.2,
   },
   headerText: { flex: 1 },
+  clearLink: {
+    color: theme.colors.textMuted,
+    fontSize: 13,
+    fontWeight: "700",
+    textDecorationLine: "underline",
+  },
   title: { color: theme.colors.text, fontWeight: "900", fontSize: 20 },
   subtitle: { color: theme.colors.textMuted, marginTop: 4, fontSize: 13 },
   chatCard: { flex: 1, padding: 14, minHeight: 280 },
@@ -301,18 +370,6 @@ const styles = StyleSheet.create({
   welcomeBox: { gap: 8, paddingVertical: 8 },
   welcomeTitle: { color: theme.colors.gold, fontSize: 16, fontWeight: "800" },
   emptyHint: { color: theme.colors.text, fontSize: 15, lineHeight: 22 },
-  welcomeFoot: { color: theme.colors.textMuted, fontSize: 13, lineHeight: 18 },
-  suggestionRow: { gap: 8, paddingTop: 10, paddingRight: 8 },
-  suggestionChip: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: "rgba(245,200,66,0.35)",
-    backgroundColor: "rgba(245,200,66,0.08)",
-  },
-  suggestionChipPressed: { backgroundColor: "rgba(245,200,66,0.16)" },
-  suggestionText: { color: theme.colors.gold, fontSize: 12, fontWeight: "700" },
   retryBtn: { marginTop: 8, alignSelf: "flex-start" },
   typingRow: {
     flexDirection: "row",
@@ -334,11 +391,6 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.gold,
     borderColor: "rgba(245,200,66,0.65)",
     borderTopRightRadius: 4,
-    shadowColor: theme.colors.gold,
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.16,
-    shadowRadius: 8,
-    elevation: 4,
   },
   bubbleAi: {
     alignSelf: "flex-start",

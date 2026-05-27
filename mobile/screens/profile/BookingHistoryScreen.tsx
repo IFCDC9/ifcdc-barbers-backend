@@ -1,11 +1,17 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Alert, Pressable, StyleSheet, Text, View } from "react-native";
 import { useNavigation } from "@react-navigation/native";
 import ProfileScreenLayout from "../../components/ProfileScreenLayout";
 import ProfileCard from "../../components/ProfileCard";
 import { ScreenEmpty, ScreenError, ScreenLoading } from "../../components/LoadingState";
 import BookingStatusBadge from "../../components/BookingStatusBadge";
 import { fetchMyBookings, type BookingRow } from "../../services/profileApi";
+import { removeBookingFromHistory } from "../../services/bookingDetailApi";
+import { confirmDelete } from "../../utils/confirmDelete";
+import {
+  bookingRemovalBlockedMessage,
+  canUserRemoveBookingFromHistory,
+} from "../../utils/bookingOpsAccess";
 import {
   formatBookingDateTime,
   formatMoney,
@@ -14,12 +20,21 @@ import { userFacingApiError } from "../../utils/userFacingApiError";
 import { UX } from "../../utils/uxCopy";
 import { theme } from "../../constants/theme";
 
-function BookingCard({ row, onPress }: { row: BookingRow; onPress: () => void }) {
+function BookingCard({
+  row,
+  onPress,
+  onRemove,
+}: {
+  row: BookingRow;
+  onPress: () => void;
+  onRemove?: () => void;
+}) {
   const when = formatBookingDateTime(row.date, row.time, row.created_at);
 
   return (
     <Pressable
       onPress={onPress}
+      onLongPress={onRemove}
       style={({ pressed }) => [pressed && styles.cardPressed]}
       accessibilityRole="button"
       accessibilityLabel={`Open ${row.service || "appointment"} on ${when}`}
@@ -70,10 +85,27 @@ export default function BookingHistoryScreen({ standalone = false }: { standalon
     void load();
   }, [load]);
 
+  const removeRow = useCallback(
+    async (row: BookingRow) => {
+      if (!canUserRemoveBookingFromHistory(row)) {
+        Alert.alert("Cannot remove", bookingRemovalBlockedMessage(row));
+        return;
+      }
+      if (!(await confirmDelete())) return;
+      try {
+        await removeBookingFromHistory(String(row.id));
+        await load();
+      } catch (e) {
+        Alert.alert("Remove failed", userFacingApiError(e));
+      }
+    },
+    [load],
+  );
+
   return (
     <ProfileScreenLayout
       title={standalone ? "Appointments" : "Booking History"}
-      subtitle="Your appointments"
+      subtitle="Your appointments · long-press to remove unpaid items"
       standalone={standalone}
     >
       {loading ? <ScreenLoading /> : null}
@@ -87,6 +119,7 @@ export default function BookingHistoryScreen({ standalone = false }: { standalon
             key={String(row.id)}
             row={row}
             onPress={() => navigation.navigate("BookingDetail", { bookingId: String(row.id) })}
+            onRemove={() => void removeRow(row)}
           />
         ))}
       </View>

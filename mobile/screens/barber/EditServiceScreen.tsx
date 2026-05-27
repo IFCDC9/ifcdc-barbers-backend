@@ -20,10 +20,12 @@ import ServiceManagementGuard from "../../components/ServiceManagementGuard";
 import { ScreenLoading } from "../../components/LoadingState";
 import {
   createBarberService,
+  deleteBarberService,
   fetchBarberServices,
   updateBarberService,
   uploadBarberServiceImage,
 } from "../../services/barberStaffApi";
+import { confirmDelete } from "../../utils/confirmDelete";
 import { apiFullUrl } from "../../constants/config";
 import { userFacingApiError } from "../../utils/userFacingApiError";
 import { theme } from "../../constants/theme";
@@ -97,6 +99,22 @@ function EditServiceInner() {
     } finally {
       setUploading(false);
     }
+  };
+
+  const onDelete = () => {
+    if (!serviceId) return;
+    void (async () => {
+      if (!(await confirmDelete(`Remove "${name.trim() || "this service"}" from your menu?`))) return;
+      setSaving(true);
+      try {
+        await deleteBarberService(barberId, serviceId);
+        Alert.alert("Deleted", "Service removed.", [{ text: "OK", onPress: () => navigation.goBack() }]);
+      } catch (e) {
+        Alert.alert("Delete failed", userFacingApiError(e));
+      } finally {
+        setSaving(false);
+      }
+    })();
   };
 
   const onSave = async () => {
@@ -223,6 +241,14 @@ function EditServiceInner() {
             disabled={saving || uploading}
             loading={saving}
           />
+          {isEdit ? (
+            <GlowButton
+              label="Delete service"
+              variant="danger"
+              onPress={onDelete}
+              disabled={saving || uploading}
+            />
+          ) : null}
         </ScrollView>
       ) : null}
     </ProfileScreenLayout>
