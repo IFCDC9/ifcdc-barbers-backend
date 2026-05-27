@@ -368,6 +368,16 @@ router.get("/occupied-slots", async (req, res) => {
 router.post("/start", async (req, res) => {
   try {
     const body = req.body || {};
+    console.log("[app-bookings] PAYMENT REQUEST BODY:", {
+      barberName: body.barberName,
+      barberId: body.barberId ?? body.barber_id,
+      serviceId: body.serviceId ?? body.service_id,
+      dateLabel: body.dateLabel,
+      timeLabel: body.timeLabel,
+      redirectUri: body.redirectUri,
+      depositAmount: body.depositAmount,
+    });
+    console.log("[app-bookings] PAYPAL ENV:", getPayPalEnvironmentMeta());
     const barberName = stripQuotes(body.barberName);
     const barberIdRaw = stripQuotes(body.barberId ?? body.barber_id);
     const barberUuidRaw = stripQuotes(body.barberUuid ?? body.barber_uuid);
@@ -682,6 +692,13 @@ router.post("/start", async (req, res) => {
       }
 
       await dbQuery(`UPDATE bookings SET paypal_order_id = $1 WHERE id = $2::uuid`, [orderId, bookingId]);
+      console.log("[app-bookings] PAYPAL RESPONSE:", {
+        orderId,
+        status: result?.status,
+        amountString,
+        approveUrl: approveUrl ? approveUrl.slice(0, 120) : null,
+        bookingId,
+      });
       console.log("[paypal] create-order success", { orderId, approveUrl: approveUrl.slice(0, 120) });
     } catch (pe) {
       const paypalErr = extractPayPalErrorFull(pe);
@@ -695,7 +712,7 @@ router.post("/start", async (req, res) => {
       throw pe;
     }
 
-    return res.json({
+    const startPayload = {
       success: true,
       orderId,
       id: orderId,
@@ -707,8 +724,17 @@ router.post("/start", async (req, res) => {
       bookingId,
       serviceId: serviceRow.id,
       serviceName: serviceTitle,
+    };
+    console.log("[app-bookings] CHECKOUT START OK:", {
+      orderId,
+      total,
+      platformFee,
+      haircutPrice,
+      hasApproveUrl: Boolean(approveUrl),
     });
+    return res.json(startPayload);
   } catch (e) {
+    console.error("[app-bookings] CHECKOUT START ERROR:", e?.message || e, e?.paypalDetail || "");
     console.error("[app-bookings] start:", e?.stack || e);
     if (e?.code === "barber_uuid_bigint_blocked") {
       return res.status(400).json({
@@ -756,10 +782,11 @@ router.post("/start", async (req, res) => {
         paypal: getPayPalEnvironmentMeta(),
       });
     }
+    const detail = e?.message ? String(e.message).slice(0, 240) : "server_error";
     return res.status(500).json({
       success: false,
       error: "server_error",
-      message: "Unable to start checkout. Please try again.",
+      message: detail || "Unable to start checkout. Please try again.",
     });
   }
 });

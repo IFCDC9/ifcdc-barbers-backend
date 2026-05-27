@@ -101,35 +101,49 @@ const apiBaseEnv =
 const useLocalApiExplicit =
   typeof process !== "undefined" && String(process.env.EXPO_PUBLIC_USE_LOCAL_API || "").trim() === "1";
 
+/** Wrong Render host (404 on booking routes) — must use backend696. */
+function isWrongProductionHost(url: string): boolean {
+  const u = url.trim().toLowerCase();
+  return u.includes("ifcdc-barbers-backend.onrender.com") && !u.includes("backend696");
+}
+
+function isBlockedApiUrl(url: string): boolean {
+  return looksLikeLocalhostApi(url) || isWrongProductionHost(url);
+}
+
 /**
- * API origin: env override when set, else production Render URL.
- * In __DEV__ with a local URL, simulator uses 127.0.0.1; physical devices can follow Expo's LAN host.
+ * Checkout + API: live Render `ifcdc-barbers-backend696` unless EXPO_PUBLIC_USE_LOCAL_API=1 in dev.
+ * Ignores mobile/.env localhost so PayPal start hits production.
  */
 export const BACKEND_URL = (() => {
-  let base = (apiBaseEnv || PRODUCTION_API_BASE).replace(/\/$/, "");
+  const live = PRODUCTION_API_BASE.replace(/\/$/, "");
 
-  if (!__DEV__ && apiBaseEnv && looksLikeLocalhostApi(apiBaseEnv)) {
+  if (__DEV__ && useLocalApiExplicit && apiBaseEnv) {
+    const local = resolveDevApiBase(apiBaseEnv);
+    console.log("[IFCDC] API (local — EXPO_PUBLIC_USE_LOCAL_API=1):", local);
+    return local;
+  }
+
+  if (apiBaseEnv && !isBlockedApiUrl(apiBaseEnv) && apiBaseEnv.includes("backend696")) {
+    const ok = apiBaseEnv.replace(/\/$/, "");
+    console.log("[IFCDC] API (env override):", ok);
+    return ok;
+  }
+
+  if (apiBaseEnv && isBlockedApiUrl(apiBaseEnv)) {
     console.warn(
-      "[IFCDC] ignoring EXPO_PUBLIC_API_URL / EXPO_PUBLIC_BACKEND_URL (localhost or tunnel) in production build — using",
-      PRODUCTION_API_BASE,
+      "[IFCDC] Blocked API URL (localhost / ngrok / wrong Render host):",
+      apiBaseEnv,
+      "→ using live:",
+      live,
     );
-    return PRODUCTION_API_BASE.replace(/\/$/, "");
+  } else if (apiBaseEnv && !apiBaseEnv.includes("backend696")) {
+    console.warn("[IFCDC] Ignoring API URL (not backend696):", apiBaseEnv, "→ using live:", live);
+  } else {
+    console.log("[IFCDC] API (live Render checkout):", live);
   }
 
-  if (__DEV__) {
-    if (!apiBaseEnv) {
-      base = `http://127.0.0.1:${DEFAULT_DEV_API_PORT}`;
-      console.log("[IFCDC] Dev default API:", base);
-    } else if (
-      looksLikeLocalhostApi(apiBaseEnv)
-      || isPrivateIpv4(parseApiUrl(apiBaseEnv)?.hostname || "")
-      || useLocalApiExplicit
-    ) {
-      base = resolveDevApiBase(apiBaseEnv);
-    }
-  }
-
-  return base;
+  return live;
 })();
 
 export const API_URL = BACKEND_URL;
@@ -138,7 +152,11 @@ export const API_URL = BACKEND_URL;
 export function apiFullUrl(path: string): string {
   const p = path.startsWith("/") ? path : `/${path}`;
   const base = BACKEND_URL.replace(/\/$/, "");
-  return `${base}${p}`;
+  const url = `${base}${p}`;
+  if (p.includes("app-bookings")) {
+    console.log("[IFCDC] Checkout request URL:", url);
+  }
+  return url;
 }
 
 const extra =
