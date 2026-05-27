@@ -1,6 +1,7 @@
 {
   "expo": {
     "name": "IFCDC Barbers",
+    "owner": "ifcdc696",
     "slug": "ifcdc-barbers-backend",
     "version": "1.0.0",
     "orientation": "portrait",

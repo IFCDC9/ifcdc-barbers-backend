@@ -4,6 +4,6 @@
  */
 export const EXPO_GO_GOOGLE_PROMPT_OPTIONS = {
   useProxy: true,
-  projectNameForProxy: "@ifcdc696/ifcdc-barbers-app",
+  projectNameForProxy: "@ifcdc696/ifcdc-barbers-backend",
   preferEphemeralSession: true,
 } as const;

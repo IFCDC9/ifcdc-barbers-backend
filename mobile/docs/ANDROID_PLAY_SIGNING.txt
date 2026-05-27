@@ -56,7 +56,7 @@ EAS CLI commands (eas-cli 18+):
 There is no .jks file in the git repo. The original upload key is stored on
 Expo for this EAS project.
 
-1) Open: https://expo.dev/accounts/ifcdc696/projects/ifcdc-barbers/credentials
+1) Open: https://expo.dev/accounts/ifcdc696/projects/ifcdc-barbers-backend/credentials
 
 2) Under Android → Production, confirm an Android Keystore exists and note:
    - Key alias

@@ -2,7 +2,7 @@ Reading your Expo iOS submission log
 =====================================
 
 Example URL (must be logged into Expo as ifcdc696):
-  https://expo.dev/accounts/ifcdc696/projects/ifcdc-barbers/submissions/ac897af4-1cbb-4cc4-9078-00031d381273
+  https://expo.dev/accounts/ifcdc696/projects/ifcdc-barbers-backend/submissions/ac897af4-1cbb-4cc4-9078-00031d381273
 
 Automated tools cannot read this page without your browser session.
 
