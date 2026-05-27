@@ -591,19 +591,28 @@ export default function BookingDetailScreen() {
           label={t("booking.details.paymentStatus")}
           value={paymentStatusHeadline(
             booking.payment_status,
-            booking.remaining_balance,
-            booking.amount_paid ?? booking.total_paid,
+            (booking as { balance_due?: number }).balance_due ?? booking.remaining_balance,
+            (booking as { amount_charged?: number }).amount_charged ??
+              booking.amount_paid ??
+              booking.total_paid,
           )}
         />
         <MetaRow label={t("booking.details.servicePrice")} value={servicePriceFor(booking)} />
         <MetaRow label={t("booking.platformFee")} value={formatMoney(booking.platform_fee)} />
+        <MetaRow label={t("booking.details.tip", { defaultValue: "Tip" })} value={formatMoney(booking.tip_amount)} />
         <MetaRow
-          label={t("booking.amountPaid")}
-          value={formatMoney(booking.amount_paid ?? booking.total_paid)}
+          label={t("booking.chargedToday")}
+          value={formatMoney(
+            (booking as { amount_charged?: number }).amount_charged ??
+              booking.amount_paid ??
+              booking.total_paid,
+          )}
         />
         <MetaRow
-          label={t("booking.remainingBalance")}
-          value={formatMoney(booking.remaining_balance)}
+          label={t("booking.balanceDue")}
+          value={formatMoney(
+            (booking as { balance_due?: number }).balance_due ?? booking.remaining_balance ?? 0,
+          )}
         />
         <MetaRow
           label={t("booking.details.totalPaid")}
@@ -615,7 +624,9 @@ export default function BookingDetailScreen() {
           <>
             {/* Operational PayPal references — kept in English per directive. */}
             <MetaRow label="PayPal order" value={booking.paypal_order_id || "—"} />
-            <MetaRow label="PayPal capture" value={booking.paypal_capture_id || "—"} />
+            {booking.paypal_capture_id ? (
+              <MetaRow label="PayPal ref" value={booking.paypal_capture_id} />
+            ) : null}
           </>
         ) : null}
       </ProfileCard>

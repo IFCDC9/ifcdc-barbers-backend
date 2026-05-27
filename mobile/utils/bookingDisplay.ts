@@ -40,19 +40,19 @@ export function resolvePaymentDisplayKind(
   const remaining = Number(remainingBalance);
   const paid = Number(amountPaid);
 
-  if (status === "failed") return "failed";
+  if (status === "payment_mismatch") return "failed";
+  if (status === "payment_failed" || status === "failed") return "failed";
   if (status === "unpaid" || status === "pending" || status === "checkout_created") return "unpaid";
   if (
     status === "paid_full" ||
-    status === "paid" ||
-    (paid > 0 && Number.isFinite(remaining) && remaining <= 0.01)
+    (status === "paid" && Number.isFinite(remaining) && remaining <= 0.01)
   ) {
     return "paid_full";
   }
   if (
-    status === "balance_due" ||
     status === "deposit_paid" ||
-    (Number.isFinite(remaining) && remaining > 0.01)
+    status === "balance_due" ||
+    (Number.isFinite(remaining) && remaining > 0.01 && paid > 0)
   ) {
     return "balance_due";
   }
@@ -65,10 +65,18 @@ export function paymentStatusHeadline(
   remainingBalance?: number | null,
   amountPaid?: number | null,
 ): string {
+  const status = String(paymentStatus || "")
+    .trim()
+    .toLowerCase();
+  if (status === "payment_mismatch") return "PAYMENT MISMATCH";
+  if (status === "payment_failed") return "PAYMENT FAILED";
+  if (status === "unpaid" || status === "pending") return "PAYMENT NOT COMPLETED";
+  if (status === "paid_full") return "PAID IN FULL";
+  if (status === "deposit_paid") return "DEPOSIT PAID";
   const kind = resolvePaymentDisplayKind(paymentStatus, remainingBalance, amountPaid);
   if (kind === "paid_full") return "PAID IN FULL";
-  if (kind === "balance_due") return "BALANCE DUE";
-  if (kind === "unpaid") return "UNPAID";
+  if (kind === "balance_due") return "DEPOSIT PAID";
+  if (kind === "unpaid") return "PAYMENT NOT COMPLETED";
   if (kind === "failed") return "PAYMENT FAILED";
   return String(paymentStatus || "PENDING")
     .replace(/_/g, " ")
@@ -89,6 +97,16 @@ export function paymentMethodDisplayLabel(method?: string | null, provider?: str
 function parseTimeParts(time?: string): { hours: number; minutes: number } | null {
   const raw = String(time || "").trim();
   if (!raw) return null;
+  const m12 = /^(\d{1,2}):(\d{2})\s*(AM|PM)$/i.exec(raw);
+  if (m12) {
+    let h = Number(m12[1]);
+    const min = Number(m12[2]);
+    const ap = m12[3].toUpperCase();
+    if (!Number.isFinite(h) || !Number.isFinite(min) || min > 59) return null;
+    if (ap === "PM" && h !== 12) h += 12;
+    if (ap === "AM" && h === 12) h = 0;
+    return { hours: h, minutes: min };
+  }
   const m24 = /^(\d{1,2}):(\d{2})/.exec(raw);
   if (m24) {
     return { hours: Number(m24[1]), minutes: Number(m24[2]) };
@@ -96,13 +114,21 @@ function parseTimeParts(time?: string): { hours: number; minutes: number } | nul
   return null;
 }
 
-/** e.g. May 21, 2026 • 10:00 AM */
+/** e.g. May 29, 2026 at 12:00 PM — never raw ISO strings. */
 export function formatBookingDateTime(date?: string, time?: string, createdAt?: string): string {
   const dateRaw = String(date || "").trim();
-  const datePart = dateRaw.includes("T") ? dateRaw.split("T")[0] : dateRaw.slice(0, 10);
+  let datePart = dateRaw.includes("T") ? dateRaw.split("T")[0] : dateRaw.slice(0, 10);
+  let timeFromDate: string | undefined;
+  if (dateRaw.includes("T") && !time) {
+    const dIso = new Date(dateRaw);
+    if (!Number.isNaN(dIso.getTime())) {
+      datePart = dIso.toISOString().slice(0, 10);
+      timeFromDate = dIso.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+    }
+  }
 
   if (datePart && /^\d{4}-\d{2}-\d{2}$/.test(datePart)) {
-    const tp = parseTimeParts(time);
+    const tp = parseTimeParts(time || timeFromDate);
     const iso = tp
       ? `${datePart}T${String(tp.hours).padStart(2, "0")}:${String(tp.minutes).padStart(2, "0")}:00`
       : `${datePart}T12:00:00`;
@@ -118,7 +144,7 @@ export function formatBookingDateTime(date?: string, time?: string, createdAt?: 
           hour: "numeric",
           minute: "2-digit",
         });
-        return `${dateLabel} • ${timeLabel}`;
+        return `${dateLabel} at ${timeLabel}`;
       }
       return dateLabel;
     }

@@ -153,6 +153,16 @@ export async function ensureBookingsTable() {
   await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS deposit_transaction_id TEXT;`);
   await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS deposit_paypal_order_id TEXT;`);
   await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS payment_method TEXT;`);
+  await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS service_price NUMERIC(10,2);`);
+  await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS amount_charged NUMERIC(10,2);`);
+  await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS balance_due NUMERIC(10,2);`);
+  await dbQuery(`
+    UPDATE bookings SET
+      service_price = COALESCE(service_price, total_price, amount),
+      balance_due = COALESCE(balance_due, remaining_balance, GREATEST(0::numeric, COALESCE(total_price, amount, 0) - COALESCE(amount_paid, 0))),
+      amount_charged = COALESCE(amount_charged, amount_paid, total_paid)
+    WHERE service_price IS NULL OR balance_due IS NULL OR amount_charged IS NULL;
+  `);
   await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS platform_fee_status VARCHAR(50) NOT NULL DEFAULT 'pending';`);
   await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS barber_payout_amount NUMERIC(10,2) NOT NULL DEFAULT 0;`);
   await dbQuery(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS barber_fee_billed BOOLEAN NOT NULL DEFAULT false;`);

@@ -28,6 +28,10 @@ const {
   extractPayPalCapturedUsd,
   computeSettlementFromCapture,
   bookingPaymentViewFromRow,
+  isBookingPaymentSettled,
+  shouldSendPaidConfirmationEmail,
+  paymentStatusForEmailFromRow,
+  settlementUpdateParams,
   PAYMENT_STATUS,
 } = require("./bookingPaymentSettlement.cjs");
 
@@ -528,12 +532,14 @@ router.post("/start", async (req, res) => {
       ins = await dbQuery(
       `INSERT INTO bookings (
          user_id, customer_name, customer_email, barber_name, barber_id, service, service_duration_minutes, date, time, amount,
-         total_price, deposit_amount, amount_paid, remaining_balance, payment_type, payment_status, payment_provider,
+         service_price, total_price, deposit_amount, amount_paid, amount_charged, balance_due, remaining_balance,
+         payment_type, payment_status, payment_provider,
          paypal_order_id, platform_fee, total_amount, booking_status, is_paid_booking,
          platform_fee_status, barber_payout_amount, barber_fee_billed, tip_amount, total_paid, business_id
        ) VALUES (
          NULL, $1, $2, $3, $4, $5, $6, $7::date, $8::time, $9,
-         $10, $11, 0, $12, 'full', 'unpaid', 'paypal',
+         $10, $10, $11, 0, 0, $12, $12,
+         $17, 'unpaid', 'paypal',
          NULL, $13, $14, 'pending_payment', false,
          'pending', $15, false, 0, 0, $16
        )
@@ -548,13 +554,13 @@ router.post("/start", async (req, res) => {
         dateStr,
         timeSql,
         haircutPrice,
-        haircutPrice,
         depositAmount,
         remainingBalance,
         platformFee,
         total,
         barberPayout,
         Number.isFinite(tenantBiz) ? tenantBiz : null,
+        depositAmount > 0 ? "deposit" : "full",
       ],
     );
     } catch (insertErr) {
@@ -771,28 +777,48 @@ router.post("/finalize", async (req, res) => {
     const response = await client.execute(capReq);
     const capture = response.result;
 
+    const { dbQuery } = await loadDb();
+
+    const markPaymentFailed = async (bookingId, status = PAYMENT_STATUS.PAYMENT_FAILED) => {
+      if (!bookingId) return;
+      await dbQuery(
+        `UPDATE bookings SET payment_status = $2, booking_status = 'pending_payment', is_paid_booking = false WHERE id = $1::uuid`,
+        [bookingId, status],
+      ).catch(() => {});
+    };
+
     if (capture?.status !== "COMPLETED") {
+      const pending = await dbQuery(
+        `SELECT id FROM bookings WHERE paypal_order_id = $1 LIMIT 1`,
+        [orderID],
+      );
+      await markPaymentFailed(pending.rows?.[0]?.id);
       return res.status(400).json({
         verified: false,
         error: "capture_not_completed",
-        message: `Order status is ${capture?.status || "unknown"}, expected COMPLETED`,
+        message: "Payment failed — booking not confirmed.",
       });
     }
 
     const captureId = extractCaptureIdFromOrder(capture);
     if (!captureId) {
+      const pending = await dbQuery(
+        `SELECT id FROM bookings WHERE paypal_order_id = $1 LIMIT 1`,
+        [orderID],
+      );
+      await markPaymentFailed(pending.rows?.[0]?.id);
       return res.status(400).json({
         verified: false,
         error: "no_capture_id",
-        message: "PayPal returned COMPLETED but no capture id",
+        message: "Payment failed — booking not confirmed.",
       });
     }
 
-    const { dbQuery } = await loadDb();
     const found = await dbQuery(
       `SELECT id, user_id, business_id, customer_name, customer_email, service, service_duration_minutes,
-              barber_id, barber_name, date, time, total_price, deposit_amount,
-              remaining_balance, platform_fee, amount_paid, payment_status, paypal_capture_id
+              barber_id, barber_name, date, time, total_price, deposit_amount, tip_amount,
+              remaining_balance, platform_fee, amount_paid, amount_charged, balance_due,
+              service_price, payment_status, paypal_capture_id
        FROM bookings WHERE paypal_order_id = $1 LIMIT 1`,
       [orderID],
     );
@@ -805,11 +831,16 @@ router.post("/finalize", async (req, res) => {
       });
     }
 
-    const haircutPrice = round2(Number(row.total_price ?? row.amount ?? 0));
+    const haircutPrice = round2(Number(row.service_price ?? row.total_price ?? row.amount ?? 0));
     const depositAmount = round2(Number(row.deposit_amount ?? 0));
     const platformFee = round2(Number(row.platform_fee ?? DEFAULT_PLATFORM_FEE));
+    const tipAmount = round2(Number(row.tip_amount ?? 0));
 
-    if (row.paypal_capture_id && String(row.paypal_capture_id) === captureId) {
+    if (
+      row.paypal_capture_id &&
+      String(row.paypal_capture_id) === captureId &&
+      isBookingPaymentSettled(row)
+    ) {
       const view = bookingPaymentViewFromRow(row);
       return res.json({
         verified: true,
@@ -828,10 +859,11 @@ router.post("/finalize", async (req, res) => {
 
     const capturedUsd = extractPayPalCapturedUsd(capture);
     if (capturedUsd == null) {
+      await markPaymentFailed(row.id, PAYMENT_STATUS.PAYMENT_FAILED);
       return res.status(400).json({
         verified: false,
         error: "no_capture_amount",
-        message: "PayPal did not return a capture amount.",
+        message: "Payment failed — booking not confirmed.",
       });
     }
 
@@ -839,83 +871,79 @@ router.post("/finalize", async (req, res) => {
       servicePrice: haircutPrice,
       depositAmount,
       platformFee,
+      tipAmount,
       capturedUsd,
+      captureId,
       paymentProvider: "paypal",
     });
 
     if (!settlement.ok) {
-      await dbQuery(
-        `UPDATE bookings SET payment_status = $2, booking_status = 'pending_payment', is_paid_booking = false WHERE id = $1::uuid`,
-        [row.id, PAYMENT_STATUS.FAILED],
-      ).catch(() => {});
+      const failStatus =
+        settlement.paymentStatus === PAYMENT_STATUS.PAYMENT_MISMATCH
+          ? PAYMENT_STATUS.PAYMENT_MISMATCH
+          : PAYMENT_STATUS.PAYMENT_FAILED;
+      await markPaymentFailed(row.id, failStatus);
       return res.status(400).json({
         verified: false,
         error: settlement.error,
-        message: settlement.message,
+        message: settlement.message || "Payment failed — booking not confirmed.",
       });
     }
 
-    if (settlement.amountPaid <= 0) {
+    const { sql, values } = settlementUpdateParams(row.id, settlement, captureId);
+    await dbQuery(sql, values);
+
+    const updated = await dbQuery(
+      `SELECT id, barber_name, date, time, service, service_price, total_price, amount, deposit_amount,
+              balance_due, remaining_balance, platform_fee, tip_amount, amount_charged, amount_paid,
+              total_paid, payment_status, payment_method, payment_provider, paypal_capture_id,
+              stripe_payment_intent_id, payment_id, total_amount, customer_name, customer_email,
+              service_duration_minutes, barber_name
+       FROM bookings WHERE id = $1::uuid LIMIT 1`,
+      [row.id],
+    );
+    const fresh = updated.rows?.[0] || row;
+    if (!isBookingPaymentSettled(fresh)) {
+      await markPaymentFailed(row.id, PAYMENT_STATUS.PAYMENT_FAILED);
       return res.status(400).json({
         verified: false,
-        error: "zero_capture",
-        message: "Cannot confirm booking without a captured payment.",
+        error: "payment_not_settled",
+        message: "Payment failed — booking not confirmed.",
       });
     }
 
-    await dbQuery(
-      `UPDATE bookings SET
-         payment_status = $2,
-         booking_status = $3,
-         is_paid_booking = $4,
-         paypal_capture_id = $5,
-         payment_method = $6,
-         payment_type = $7,
-         amount_paid = $8,
-         total_paid = $8,
-         remaining_balance = $9,
-         total_amount = $10,
-         platform_fee_status = 'collected'
-       WHERE id = $1::uuid`,
-      [
-        row.id,
-        settlement.paymentStatus,
-        settlement.bookingStatus,
-        settlement.isPaidBooking,
-        captureId,
-        settlement.paymentMethod,
-        settlement.paymentType,
-        settlement.amountPaid,
-        settlement.remainingBalance,
-        settlement.totalDue,
-      ],
-    );
-
-    try {
-      const { sendBookingEmail } = require("./bookingEmail.cjs");
-      await sendBookingEmail({
-        name: row.customer_name || "Guest",
-        email: row.customer_email,
-        service: row.service || "Haircut",
-        servicePrice: haircutPrice,
-        serviceDuration: row.service_duration_minutes,
-        date: String(row.date ?? ""),
-        time: String(row.time ?? ""),
-        paymentId: captureId,
-        barberName: row.barber_name,
-        totalPrice: haircutPrice,
-        depositAmount: depositPaid,
-        amountPaid: total,
-        remainingBalance,
-        paymentType: depositPaid > 0 ? "deposit" : "full",
-        totalPaid: total,
-      });
-      console.log("[app-bookings] confirmation email sent:", row.customer_email);
-    } catch (mailErr) {
-      console.warn("[app-bookings] confirmation email failed:", mailErr?.message || mailErr);
+    if (shouldSendPaidConfirmationEmail(settlement.paymentStatus)) {
+      try {
+        const { sendBookingEmail } = require("./bookingEmail.cjs");
+        const view = bookingPaymentViewFromRow(fresh);
+        await sendBookingEmail({
+          name: row.customer_name || "Guest",
+          email: row.customer_email,
+          service: row.service || "Haircut",
+          servicePrice: view.servicePrice,
+          serviceDuration: row.service_duration_minutes,
+          date: String(row.date ?? ""),
+          time: String(row.time ?? ""),
+          paymentStatus: paymentStatusForEmailFromRow(fresh),
+          paymentId: captureId,
+          captureId,
+          barberName: row.barber_name,
+          platformFee: view.platformFee,
+          tipAmount: view.tipAmount,
+          amountCharged: view.amountCharged,
+          amountPaid: view.amountPaid,
+          balanceDue: view.balanceDue,
+          bookingRow: fresh,
+        });
+        console.log("[app-bookings] payment confirmation email sent:", row.customer_email, view.paymentStatus);
+      } catch (mailErr) {
+        console.warn("[app-bookings] confirmation email failed:", mailErr?.message || mailErr);
+      }
+    } else {
+      console.warn("[app-bookings] skipped paid confirmation email — status not settled", settlement.paymentStatus);
     }
 
-    // Best-effort push fanout — never blocks PayPal capture flow.
+    // Best-effort push fanout — only after verified payment.
     try {
       const pushNotifier = require("./pushNotifier.cjs");
       const bookingPayload = {
@@ -953,15 +981,6 @@ router.post("/finalize", async (req, res) => {
       console.warn("[app-bookings] push dispatcher unavailable:", pushErr?.message || pushErr);
     }
 
-    const updated = await dbQuery(
-      `SELECT id, barber_name, date, time, service, total_price, amount, deposit_amount,
-              remaining_balance, platform_fee, amount_paid, total_paid, payment_status,
-              payment_method, payment_provider, paypal_capture_id, stripe_payment_intent_id,
-              payment_id, total_amount
-       FROM bookings WHERE id = $1::uuid LIMIT 1`,
-      [row.id],
-    );
-    const fresh = updated.rows?.[0] || row;
     const view = bookingPaymentViewFromRow(fresh);
 
     return res.json({

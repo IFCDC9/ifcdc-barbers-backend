@@ -36,6 +36,11 @@ const {
   resolvedBarberDbIdOnly,
   getTableBarberIdType,
 } = require("./barberIdentity.cjs");
+const {
+  computeSettlementFromCapture,
+  bookingEmailPayloadFromRow,
+  PAYMENT_STATUS,
+} = require("./bookingPaymentSettlement.cjs");
 
 function getAuthPayload(req) {
   const token = extractBearerToken(req.get("authorization"));
@@ -253,15 +258,13 @@ export async function insertAuraVoiceBookingRow(body, sendBookingEmail) {
       date: dateStr,
       time: timeStr,
       service: serviceTitle,
-      paymentId: voiceCaptureId,
-      totalPrice,
-      depositAmount: 0,
-      amountPaid: 0,
-      remainingBalance: totalPrice,
-      paymentType: "full",
-      tipAmount: 0,
-      totalPaid: 0,
       language: bookingLanguage,
+      paymentStatus: PAYMENT_STATUS.UNPAID,
+      servicePrice: totalPrice,
+      platformFee: 0.99,
+      tipAmount: 0,
+      amountCharged: 0,
+      balanceDue: totalPrice,
     });
     emailSent = !r?.error;
     emailError = r?.error || null;
@@ -449,7 +452,7 @@ export function createBookingsRouter({ sendBookingEmail, sendBookingPush, requir
       `SELECT id, user_id, customer_name, customer_email, barber_name, barber_id, business_id, client_id, service, date, time,
               phone,
               amount, total_price, deposit_amount, amount_paid, remaining_balance,
-              payment_type, payment_status, payment_provider, paypal_order_id, paypal_capture_id,
+              payment_type, payment_status, payment_method, payment_provider, paypal_order_id, paypal_capture_id,
               style_id, style_title, style_image_url, tip_amount, total_paid,
               platform_fee, total_amount, booking_status, is_paid_booking, created_at
        FROM bookings
@@ -464,8 +467,8 @@ export function createBookingsRouter({ sendBookingEmail, sendBookingPush, requir
   const BOOKING_DETAIL_SELECT = `SELECT b.id, b.user_id, b.customer_name, b.customer_email, b.barber_name, b.barber_id, b.business_id, b.client_id, b.service, b.service_duration_minutes,
               b.date, b.time,
               b.phone,
-              b.amount, b.total_price, b.deposit_amount, b.amount_paid, b.remaining_balance,
-              b.payment_type, b.payment_status, b.payment_provider, b.paypal_order_id, b.paypal_capture_id,
+              b.amount, b.service_price, b.total_price, b.deposit_amount, b.amount_paid, b.amount_charged, b.balance_due, b.remaining_balance,
+              b.payment_type, b.payment_status, b.payment_method, b.payment_provider, b.paypal_order_id, b.paypal_capture_id,
               b.style_id, b.style_title, b.style_image_url, b.tip_amount, b.total_paid,
               b.platform_fee, b.total_amount, b.booking_status, b.is_paid_booking,
               b.notes, b.cancelled_at, b.cancelled_by, b.created_at,
@@ -857,20 +860,12 @@ export function createBookingsRouter({ sendBookingEmail, sendBookingPush, requir
               name: booking.customer_name || "Guest",
               email,
               service: booking.service || booking.style_title || "Appointment",
-              servicePrice: Number(booking.total_price ?? booking.amount ?? 0),
               serviceDuration: Number(booking.service_duration_minutes) || undefined,
               date: newDate,
               time: newTimeLabel,
-              paymentId: booking.paypal_capture_id || booking.paypal_order_id || null,
               barberName: booking.barber_name || "",
-              totalPrice: Number(booking.total_price ?? booking.amount ?? 0),
-              depositAmount: Number(booking.deposit_amount ?? 0),
-              amountPaid: Number(booking.amount_paid ?? 0),
-              remainingBalance: Number(booking.remaining_balance ?? 0),
-              paymentType: booking.payment_type || "full",
-              tipAmount: Number(booking.tip_amount ?? 0),
-              totalPaid: Number(booking.total_paid ?? booking.total_amount ?? 0),
               language: undefined,
+              ...bookingEmailPayloadFromRow(booking),
             });
             console.log(`[reschedule] confirmation email sent to ${email} for ${id.slice(0, 8)}`);
           } catch (emailErr) {
@@ -1255,14 +1250,7 @@ export function createBookingsRouter({ sendBookingEmail, sendBookingPush, requir
         date: dateStr,
         time: timeStr,
         service: booking.style_title || booking.service || "Appointment",
-        paymentId: booking.paypal_capture_id || booking.paypal_order_id || undefined,
-        totalPrice: Number(booking.total_price ?? booking.amount ?? 0),
-        depositAmount: Number(booking.deposit_amount ?? 0),
-        amountPaid: Number(booking.amount_paid ?? 0),
-        remainingBalance: Number(booking.remaining_balance ?? 0),
-        paymentType: booking.payment_type || "full",
-        tipAmount: Number(booking.tip_amount ?? 0),
-        totalPaid: Number(booking.total_paid ?? 0),
+        ...bookingEmailPayloadFromRow(booking),
       });
 
       if (mail?.error) {
@@ -1584,7 +1572,6 @@ export function createBookingsRouter({ sendBookingEmail, sendBookingPush, requir
       const barberPayoutStored = roundMoney2(Math.max(0, totalPrice - barberBookingFee));
       const serviceTitle = quoted.styleTitle || String(styleRow.title || "").trim() || "Style";
       const remainingBalance = roundMoney2(Math.max(0, totalPrice - serviceCharge));
-      const paymentStatus = paymentType === "deposit" ? "deposit_paid" : "paid";
 
       let clientId = null;
       try {
@@ -1610,6 +1597,30 @@ export function createBookingsRouter({ sendBookingEmail, sendBookingPush, requir
         return res.status(400).json({ error: verify.error, message: verify.message });
       }
 
+      const capturedAmt = extractCaptureAmount(verify.order);
+      const settlement = computeSettlementFromCapture({
+        servicePrice: totalPrice,
+        depositAmount,
+        platformFee: barberBookingFee,
+        tipAmount,
+        capturedUsd: capturedAmt?.value ?? paypalTotal,
+        captureId: paypalCaptureId,
+        paymentProvider: "paypal",
+      });
+      if (!settlement.ok) {
+        const failStatus =
+          settlement.paymentStatus === PAYMENT_STATUS.PAYMENT_MISMATCH
+            ? PAYMENT_STATUS.PAYMENT_MISMATCH
+            : PAYMENT_STATUS.PAYMENT_FAILED;
+        return res.status(400).json({
+          error: settlement.error || failStatus,
+          message: settlement.message || "Payment amount does not match booking total.",
+        });
+      }
+      const paymentStatus = settlement.paymentStatus;
+      const settledRemaining = settlement.balanceDue;
+      const settledPaid = settlement.amountPaid;
+
       const userId = getAuthUserId(req);
       const styleImageUrl = quoted.styleImageUrl ?? (styleRow.image_url ? String(styleRow.image_url) : null);
       const tenantBizIdForInsert = await resolveBusinessIdForBarber(barberId);
@@ -1631,14 +1642,14 @@ export function createBookingsRouter({ sendBookingEmail, sendBookingPush, requir
       const insert = await dbQuery(
         `INSERT INTO bookings
          (user_id, customer_name, customer_email, barber_name, barber_id, client_id, service, date, time, amount,
-          total_price, deposit_amount, amount_paid, remaining_balance,
-          payment_type, payment_status, payment_provider, paypal_order_id, paypal_capture_id,
+          service_price, total_price, deposit_amount, amount_paid, amount_charged, balance_due, remaining_balance,
+          payment_type, payment_status, payment_method, payment_provider, paypal_order_id, paypal_capture_id,
           style_id, style_title, style_image_url, tip_amount, total_paid,
           platform_fee, total_amount, booking_status, is_paid_booking,
           deposit_required, deposit_status, deposit_payment_link, deposit_transaction_id, deposit_paypal_order_id,
           platform_fee_status, barber_payout_amount, barber_fee_billed, business_id)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,
-                 $29,$30,$31,$32,$33,$34,$35,$36,$37)
+                 $29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41)
          ON CONFLICT (paypal_capture_id) DO NOTHING
          RETURNING id, created_at`,
         [
@@ -1653,11 +1664,15 @@ export function createBookingsRouter({ sendBookingEmail, sendBookingPush, requir
           timeStr,
           totalPrice,
           totalPrice,
+          totalPrice,
           depositAmount,
-          serviceCharge,
-          remainingBalance,
-          paymentType,
+          settledPaid,
+          settledPaid,
+          settledRemaining,
+          settledRemaining,
+          settlement.paymentType,
           paymentStatus,
+          settlement.paymentMethod,
           "paypal",
           paypalOrderId,
           paypalCaptureId,
@@ -1665,11 +1680,11 @@ export function createBookingsRouter({ sendBookingEmail, sendBookingPush, requir
           serviceTitle,
           styleImageUrl,
           tipAmount,
-          paypalTotal,
+          settledPaid,
           barberBookingFee,
           totalAmount,
           "confirmed",
-          true,
+          settlement.isPaidBooking,
           false,
           "not_required",
           null,
@@ -1717,15 +1732,23 @@ export function createBookingsRouter({ sendBookingEmail, sendBookingPush, requir
           date: dateStr,
           time: timeStr,
           service: serviceTitle,
-          paymentId: paypalCaptureId,
-          totalPrice,
-          depositAmount,
-          amountPaid: serviceCharge,
-          remainingBalance,
-          paymentType,
-          tipAmount,
-          totalPaid: paypalTotal,
+          serviceDuration: undefined,
           language: payBookingLang,
+          ...bookingEmailPayloadFromRow({
+            service_price: totalPrice,
+            total_price: totalPrice,
+            deposit_amount: depositAmount,
+            amount_paid: settledPaid,
+            amount_charged: settledPaid,
+            balance_due: settledRemaining,
+            remaining_balance: settledRemaining,
+            platform_fee: barberBookingFee,
+            tip_amount: tipAmount,
+            payment_status: paymentStatus,
+            paypal_capture_id: paypalCaptureId,
+            payment_provider: "paypal",
+            payment_method: settlement.paymentMethod,
+          }),
         });
         emailSent = !r?.error;
         emailError = r?.error || null;

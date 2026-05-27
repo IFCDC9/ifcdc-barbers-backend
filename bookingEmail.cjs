@@ -11,6 +11,12 @@ const {
   sendEmail,
   sendResendWithRetry,
 } = require("./emailResend.cjs");
+const {
+  PAYMENT_STATUS,
+  paymentStatusForEmailFromRow,
+  shouldSendPaidConfirmationEmail,
+  round2,
+} = require("./bookingPaymentSettlement.cjs");
 
 function escapeHtml(s) {
   return String(s)
@@ -189,10 +195,90 @@ function logResendStatus() {
 }
 
 /**
+ * Build email subject + bodies from verified payment_status only (never payment_type / checkout labels).
+ * @param {string} paymentStatus
+ * @param {object} p
+ */
+function buildPaymentEmailContent(paymentStatus, p) {
+  const fmt = (n) => (Number.isFinite(Number(n)) ? Number(n).toFixed(2) : "0.00");
+  const servicePrice = round2(p.servicePrice ?? p.totalPrice ?? 0);
+  const platformFee = round2(p.platformFee ?? 0.99);
+  const tip = round2(p.tipAmount ?? 0);
+  const chargedToday = round2(p.amountCharged ?? p.amountPaid ?? p.totalPaid ?? 0);
+  const balanceDue = round2(p.balanceDue ?? p.remainingBalance ?? 0);
+  const captureId = p.paymentId || p.captureId || null;
+  const status = String(paymentStatus || PAYMENT_STATUS.UNPAID).toLowerCase();
+
+  const safeName = escapeHtml(p.name || "Guest");
+  const safeService = escapeHtml(p.service || "TBD");
+  const safeDate = escapeHtml(p.date || "TBD");
+  const safeTime = escapeHtml(p.time || "TBD");
+  const safeBarber = p.barberName ? escapeHtml(p.barberName) : "";
+  const payRefLine = captureId && shouldSendPaidConfirmationEmail(status)
+    ? `<p><strong>PayPal ref:</strong> ${escapeHtml(String(captureId))}</p>`
+    : "";
+
+  if (status === PAYMENT_STATUS.PAID_FULL) {
+    const subject = "[IFCDC] New booking — Paid in Full";
+    const html = `
+<h2>Booking Confirmed</h2>
+<p>Name: ${safeName}</p>
+${safeBarber ? `<p>Barber: ${safeBarber}</p>` : ""}
+<p>Service: ${safeService}</p>
+<p>Date: ${safeDate}</p>
+<p>Time: ${safeTime}</p>
+<p><strong>Payment status:</strong> PAID IN FULL</p>
+<p>Service price: $${fmt(servicePrice)}</p>
+<p>Platform fee: $${fmt(platformFee)}</p>
+<p>Tip: $${fmt(tip)}</p>
+<p>Charged today: $${fmt(chargedToday)}</p>
+<p>Balance due: $0.00</p>
+${payRefLine}
+    `.trim();
+    return { subject, html, plain: htmlToPlainText(html), template: "paid_full" };
+  }
+
+  if (status === PAYMENT_STATUS.DEPOSIT_PAID) {
+    const subject = "[IFCDC] New booking — Deposit Paid";
+    const html = `
+<h2>Booking Confirmed</h2>
+<p>Name: ${safeName}</p>
+${safeBarber ? `<p>Barber: ${safeBarber}</p>` : ""}
+<p>Service: ${safeService}</p>
+<p>Date: ${safeDate}</p>
+<p>Time: ${safeTime}</p>
+<p><strong>Payment status:</strong> DEPOSIT PAID</p>
+<p>Service price: $${fmt(servicePrice)}</p>
+<p>Platform fee: $${fmt(platformFee)}</p>
+<p>Tip: $${fmt(tip)}</p>
+<p>Charged today: $${fmt(chargedToday)}</p>
+<p>Balance due: $${fmt(balanceDue)}</p>
+${payRefLine}
+    `.trim();
+    return { subject, html, plain: htmlToPlainText(html), template: "deposit_paid" };
+  }
+
+  const subject = "[IFCDC] Booking pending — Payment Not Completed";
+  const html = `
+<h2>Booking Pending</h2>
+<p>Name: ${safeName}</p>
+${safeBarber ? `<p>Barber: ${safeBarber}</p>` : ""}
+<p>Service: ${safeService}</p>
+<p>Date: ${safeDate}</p>
+<p>Time: ${safeTime}</p>
+<p><strong>Payment status:</strong> PAYMENT NOT COMPLETED</p>
+<p>Service price: $${fmt(servicePrice)}</p>
+<p>Platform fee: $${fmt(platformFee)}</p>
+<p>Do not treat this appointment as paid in full until PayPal capture is verified.</p>
+  `.trim();
+  return { subject, html, plain: htmlToPlainText(html), template: "pending" };
+}
+
+/**
  * Primary booking confirmation — Resend only. **Throws** if the customer email fails after retries.
- * Optional admin copy to `BOOKING_ADMIN_EMAIL` or `service@ifcdc.org` — admin failure is logged, not thrown.
+ * Uses payment_status + capture amount as source of truth (never payment_type alone).
  *
- * @param {{ name: string, email: string, service: string, date: string, time: string, paymentId?: string, barberName?: string, totalPrice?: number, depositAmount?: number, amountPaid?: number, remainingBalance?: number, paymentType?: string, language?: string }} p
+ * @param {object} p
  */
 async function sendBookingEmail({
   name,
@@ -203,15 +289,21 @@ async function sendBookingEmail({
   date,
   time,
   paymentId,
+  captureId,
   barberName,
   totalPrice,
   depositAmount,
   amountPaid,
+  amountCharged,
   remainingBalance,
+  balanceDue,
   paymentType,
+  paymentStatus,
   tipAmount,
   totalPaid,
+  platformFee,
   language,
+  bookingRow,
 } = {}) {
   const resend = getResend();
   if (!resend) {
@@ -229,60 +321,36 @@ async function sendBookingEmail({
       'MAIL_FROM is not set. Set MAIL_FROM=IFCDC Barbers <notifications@ifcdcbarbersapp.com> in backend/.env'
     );
   }
-  const safeName = escapeHtml(name || "Guest");
-  const safeService = escapeHtml(service || "TBD");
-  const safeDate = escapeHtml(date || "TBD");
-  const safeTime = escapeHtml(time || "TBD");
-  const safePay = paymentId ? escapeHtml(String(paymentId)) : "";
-  const safeBarber = escapeHtml(barberName || "");
-  const labels = bookingEmailLabels(language);
-  const isDeposit = String(paymentType || "").toLowerCase() === "deposit";
-  const fmt = (n) => (Number.isFinite(Number(n)) ? Number(n).toFixed(2) : "—");
-  const servicePriceLine =
-    Number.isFinite(Number(servicePrice)) && Number(servicePrice) > 0
-      ? `<p>${labels.lblServicePrice}: $${fmt(servicePrice)} USD</p>`
-      : "";
-  const durationMins = Number(serviceDuration);
-  const serviceDurationLine =
-    Number.isFinite(durationMins) && durationMins > 0
-      ? `<p>${labels.lblServiceDuration}: ${Math.round(durationMins)} min</p>`
-      : "";
-  const tip = Number(tipAmount) || 0;
-  const totalCharged = Number.isFinite(Number(totalPaid)) ? Number(totalPaid) : (Number(amountPaid) || 0) + tip;
-  const tipLine =
-    tip > 0
-      ? `<p><strong>${labels.lblTip}:</strong> $${fmt(tip)} USD</p><p><strong>${labels.lblTotalCharged}:</strong> $${fmt(totalCharged)} USD</p>`
-      : "";
-  const payLines = isDeposit
-    ? `<p><strong>${labels.lblDepositPaid}:</strong> $${fmt(amountPaid)} USD</p>
-       <p><strong>${labels.lblServiceTotal}:</strong> $${fmt(totalPrice)} USD</p>
-       <p><strong>${labels.lblRemaining}:</strong> $${fmt(remainingBalance)} USD</p>
-       ${tipLine}`
-    : `<p><strong>${labels.lblAmountPaid}:</strong> $${fmt(amountPaid ?? totalPrice)} USD ${labels.lblPaidInFull}</p>
-       ${tipLine}`;
+  const resolvedStatus = paymentStatus
+    ? String(paymentStatus).toLowerCase()
+    : bookingRow
+      ? paymentStatusForEmailFromRow(bookingRow)
+      : PAYMENT_STATUS.UNPAID;
 
-  const html = `
-<h2>${labels.h2}</h2>
-<p>${labels.lblName}: ${safeName}</p>
-${safeBarber ? `<p>${labels.lblBarber}: ${safeBarber}</p>` : ""}
-<p>${labels.lblService}: ${safeService}</p>
-${servicePriceLine}
-${serviceDurationLine}
-<p>${labels.lblDate}: ${safeDate}</p>
-<p>${labels.lblTime}: ${safeTime}</p>
-${payLines}
-${safePay ? `<p>${labels.lblPayRef}: ${safePay}</p>` : ""}
-  `.trim();
+  const emailContent = buildPaymentEmailContent(resolvedStatus, {
+    name,
+    service,
+    date,
+    time,
+    barberName,
+    servicePrice: servicePrice ?? totalPrice,
+    totalPrice,
+    platformFee,
+    tipAmount,
+    amountCharged: amountCharged ?? amountPaid ?? totalPaid,
+    amountPaid,
+    balanceDue: balanceDue ?? remainingBalance,
+    remainingBalance,
+    paymentId: paymentId || captureId,
+    captureId: captureId || paymentId,
+  });
 
-  const plain = htmlToPlainText(html);
-
-  /** Same as GET /api/test-email — `sendEmail({ to, subject, html })` → RESEND_API_KEY + MAIL_FROM. */
   const customerResult = await sendEmail({
     to: toAddr,
-    subject: isDeposit ? labels.subjectDeposit : labels.subjectFull,
-    html,
-    text: plain,
-    label: "booking-confirmation",
+    subject: emailContent.subject,
+    html: emailContent.html,
+    text: emailContent.plain,
+    label: `booking-confirmation-${emailContent.template}`,
   });
   if (customerResult.error) {
     throw new Error(customerResult.error.message || "Booking email send failed");
@@ -291,30 +359,22 @@ ${safePay ? `<p>${labels.lblPayRef}: ${safePay}</p>` : ""}
   const adminEmail = String(process.env.BOOKING_ADMIN_EMAIL || "service@ifcdc.org").trim();
   let adminResult = null;
   if (adminEmail) {
-    const adminPay = isDeposit
-      ? `Deposit $${fmt(amountPaid)} / total $${fmt(totalPrice)} / remaining $${fmt(remainingBalance)} / tip $${fmt(tip)} / charged $${fmt(totalCharged)}`
-      : `Paid in full $${fmt(amountPaid ?? totalPrice)} / tip $${fmt(tip)} / charged $${fmt(totalCharged)}`;
-    const adminHtml = `<p>New booking (${isDeposit ? "deposit" : "full"})</p><p>Name: ${safeName}</p>${
-      safeBarber ? `<p>Barber: ${safeBarber}</p>` : ""
-    }<p>Service: ${safeService}</p>${servicePriceLine}${serviceDurationLine}<p>Date: ${safeDate}</p><p>Time: ${safeTime}</p><p>${adminPay}</p><p>PayPal ref: ${
-      safePay || "n/a"
-    }</p>`;
-    const adminPlain = htmlToPlainText(adminHtml);
+    const adminPlain = emailContent.plain;
     try {
       adminResult = await sendResendWithRetry(
         resend,
         {
           from,
           to: adminEmail,
-          subject: `[IFCDC] New booking — ${trimmedDateTime(date, time)}`,
-          html: adminHtml,
+          subject: emailContent.subject,
+          html: emailContent.html,
           text: adminPlain,
         },
         "booking-admin-notification"
       );
     } catch (adminErr) {
       console.error(
-        "ADMIN EMAIL FAILED (after retry, full):",
+        "ADMIN EMAIL FAILED (after retry):",
         adminErr instanceof Error ? adminErr.stack : JSON.stringify(adminErr, null, 2)
       );
     }

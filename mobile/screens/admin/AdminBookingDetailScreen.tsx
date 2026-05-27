@@ -198,14 +198,28 @@ export default function AdminBookingDetailScreen() {
           label="Payment status"
           value={paymentStatusHeadline(
             booking.payment_status,
-            booking.remaining_balance,
-            booking.amount_paid ?? booking.total_paid,
+            (booking as { balance_due?: number }).balance_due ?? booking.remaining_balance,
+            booking.amount_charged ?? booking.amount_paid ?? booking.total_paid,
           )}
         />
-        <MetaRow label="Amount paid" value={formatMoney(booking.amount_paid ?? booking.total_paid)} />
-        <MetaRow label="Remaining balance" value={formatMoney(booking.remaining_balance)} />
-        <MetaRow label="Service price" value={formatMoney(booking.total_price ?? booking.amount)} />
+        <MetaRow
+          label="Service price"
+          value={formatMoney(
+            (booking as { service_price?: number }).service_price ?? booking.total_price ?? booking.amount,
+          )}
+        />
         <MetaRow label="Platform fee" value={formatMoney(booking.platform_fee)} />
+        <MetaRow label="Tip" value={formatMoney(booking.tip_amount)} />
+        <MetaRow
+          label="Charged today"
+          value={formatMoney(booking.amount_charged ?? booking.amount_paid ?? booking.total_paid)}
+        />
+        <MetaRow
+          label="Balance due"
+          value={formatMoney(
+            (booking as { balance_due?: number }).balance_due ?? booking.remaining_balance ?? 0,
+          )}
+        />
         <MetaRow
           label="Method"
           value={paymentMethodDisplayLabel(
@@ -216,14 +230,17 @@ export default function AdminBookingDetailScreen() {
         <MetaRow label="Summary" value={paymentSummary(booking)} />
         <MetaRow label="Provider" value={booking.payment_provider || "—"} />
         <MetaRow label="PayPal order" value={booking.paypal_order_id || "—"} />
-        <MetaRow
-          label="Transaction ID"
-          value={
-            booking.paypal_capture_id ||
-            (booking as { stripe_payment_intent_id?: string }).stripe_payment_intent_id ||
-            "—"
-          }
-        />
+        {booking.paypal_capture_id ||
+        (booking as { stripe_payment_intent_id?: string }).stripe_payment_intent_id ? (
+          <MetaRow
+            label="PayPal ref"
+            value={
+              booking.paypal_capture_id ||
+              (booking as { stripe_payment_intent_id?: string }).stripe_payment_intent_id ||
+              "—"
+            }
+          />
+        ) : null}
       </ProfileCard>
 
       <ProfileCard style={styles.section}>

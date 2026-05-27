@@ -8,6 +8,8 @@ export type AdminBookingDetail = BookingRow & {
   amount_paid?: number | string | null;
   remaining_balance?: number | string | null;
   payment_type?: string | null;
+  payment_method?: string | null;
+  payment_status?: string | null;
   payment_provider?: string | null;
   paypal_order_id?: string | null;
   paypal_capture_id?: string | null;
