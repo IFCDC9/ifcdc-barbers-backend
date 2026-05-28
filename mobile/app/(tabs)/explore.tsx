@@ -6,7 +6,7 @@ import { useTranslation } from "react-i18next"
 import CardContainer from "../../components/CardContainer"
 import DarkGradientBackground from "../../components/DarkGradientBackground"
 import GlowButton from "../../components/GlowButton"
-import { theme } from "../../constants/theme"
+import { palette, typography, ui } from "../../constants/theme"
 
 const HORIZONTAL_PAD = 24
 
@@ -45,7 +45,7 @@ const ExploreScreen = () => {
           <Text style={styles.tagline}>{t("home.tagline")}</Text>
         </View>
 
-        <CardContainer style={styles.heroCard}>
+        <CardContainer glow style={styles.heroCard}>
           <Text style={styles.heroTitle}>{t("home.heroTitle")}</Text>
           <Text style={styles.heroCopy}>{t("home.heroCopy")}</Text>
           <GlowButton label={t("home.heroCta")} onPress={() => navigation.navigate("Book")} />
@@ -58,7 +58,7 @@ const ExploreScreen = () => {
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: theme.colors.bg0,
+    backgroundColor: palette.bg0,
   },
   scroll: {
     flex: 1,
@@ -75,16 +75,13 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   brand: {
-    color: theme.colors.gold,
-    fontWeight: "800",
+    ...typography.brand,
     flexShrink: 1,
     width: "100%",
     maxWidth: "100%",
   },
   tagline: {
-    color: theme.colors.textMuted,
-    fontSize: 15,
-    fontWeight: "500",
+    ...typography.bodyMuted,
     flexShrink: 1,
   },
   heroCard: {
@@ -92,14 +89,12 @@ const styles = StyleSheet.create({
     marginTop: 12,
   },
   heroTitle: {
-    color: theme.colors.text,
+    ...ui.screenTitle,
     fontSize: 26,
-    fontWeight: "800",
     marginBottom: 12,
-    letterSpacing: 0.3,
   },
   heroCopy: {
-    color: theme.colors.textMuted,
+    ...ui.screenSubtitle,
     fontSize: 16,
     lineHeight: 24,
     marginBottom: 22,

@@ -44,12 +44,9 @@ import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAuth } from "../services/authContext";
 import { LazyScreen } from "../components/LazyScreen";
+import { palette, shadow, tabBar, typography } from "../constants/theme";
 
 const Tab = createBottomTabNavigator();
-
-const ACCENT = "#F5C842";
-const INACTIVE = "#7d7d7d";
-const TAB_BG = "rgba(8,8,8,0.96)";
 
 type Loader = () => unknown;
 
@@ -83,11 +80,11 @@ function AdminTabScreen() {
 function tabIcon(name: keyof typeof Ionicons.glyphMap) {
   return ({ focused }: { focused: boolean }) => (
     <View style={tabIconStyles.wrap}>
-      {focused ? <View style={tabIconStyles.activeBg} /> : null}
+      {focused ? <View style={tabIconStyles.activePill} /> : null}
       <Ionicons
         name={name}
-        size={focused ? 22 : 21}
-        color={focused ? ACCENT : INACTIVE}
+        size={focused ? tabBar.iconActiveSize : tabBar.iconInactiveSize}
+        color={focused ? tabBar.activeTint : tabBar.inactiveTint}
       />
       {focused ? <View style={tabIconStyles.activeDot} /> : null}
     </View>
@@ -120,19 +117,21 @@ export default function HomeTabs() {
       screenOptions={{
         headerShown: false,
         tabBarStyle: {
-          backgroundColor: TAB_BG,
+          backgroundColor: tabBar.background,
           borderTopWidth: 1,
-          borderTopColor: "rgba(245,200,66,0.18)",
+          borderTopColor: tabBar.borderTopColor,
           height: tabBarHeight,
           paddingBottom: Math.max(insets.bottom, 8),
           paddingTop: 8,
+          ...shadow.deep,
         },
-        tabBarActiveTintColor: ACCENT,
-        tabBarInactiveTintColor: INACTIVE,
+        tabBarActiveTintColor: tabBar.activeTint,
+        tabBarInactiveTintColor: tabBar.inactiveTint,
         tabBarLabelStyle: {
-          fontSize: 10.5,
-          fontWeight: "700",
-          letterSpacing: 0.3,
+          ...typography.micro,
+          fontSize: tabBar.labelSize,
+          textTransform: "none",
+          letterSpacing: 0.35,
           marginTop: 2,
           marginBottom: 2,
         },
@@ -176,28 +175,25 @@ export default function HomeTabs() {
 }
 
 const tabIconStyles = StyleSheet.create({
-  wrap: { width: 44, height: 32, alignItems: "center", justifyContent: "center" },
-  activeBg: {
+  wrap: { width: 48, height: 34, alignItems: "center", justifyContent: "center" },
+  activePill: {
     position: "absolute",
-    top: 2,
-    width: 38,
-    height: 26,
-    borderRadius: 13,
-    backgroundColor: "rgba(245,200,66,0.10)",
+    top: 1,
+    width: tabBar.pillWidth,
+    height: tabBar.pillHeight,
+    borderRadius: tabBar.pillRadius,
+    backgroundColor: tabBar.pillBackground,
     borderWidth: 1,
-    borderColor: "rgba(245,200,66,0.32)",
+    borderColor: tabBar.pillBorder,
+    ...tabBar.pillGlow,
   },
   activeDot: {
     position: "absolute",
-    bottom: -3,
-    width: 4,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: ACCENT,
-    shadowColor: ACCENT,
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.85,
-    shadowRadius: 4,
-    elevation: 4,
+    bottom: -2,
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+    backgroundColor: palette.gold,
+    ...shadow.glowGold,
   },
 });

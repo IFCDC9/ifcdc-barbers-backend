@@ -230,6 +230,51 @@ export const glow = {
  * should import from `palette`, `radius`, `shadow`, `typography`, `glow`,
  * and `space()` directly for clarity.
  */
+/** Bottom tab navigator tokens */
+export const tabBar = {
+  background: "rgba(6, 6, 6, 0.98)",
+  borderTopColor: "rgba(245,200,66,0.22)",
+  activeTint: GOLD,
+  inactiveTint: "rgba(255,255,255,0.42)",
+  labelSize: 10.5,
+  iconActiveSize: 22,
+  iconInactiveSize: 20,
+  pillWidth: 40,
+  pillHeight: 28,
+  pillRadius: 14,
+  pillBackground: "rgba(245,200,66,0.14)",
+  pillBorder: GOLD_SOFT,
+  pillGlow: glowGoldSoft,
+};
+
+/** Consistent button metrics */
+export const buttons = {
+  minHeight: 48,
+  minHeightCompact: 40,
+  paddingVertical: 14,
+  paddingVerticalCompact: 10,
+  paddingHorizontal: 16,
+  gap: 10,
+};
+
+/** React Native Switch track/thumb defaults */
+export const switchColors = {
+  trackOff: palette.bg2,
+  trackOn: "rgba(245,200,66,0.45)",
+  thumbOff: palette.textDim,
+  thumbOn: palette.gold,
+};
+
+/** Shared section / list row recipes */
+export const ui = {
+  sectionTitle: typography.eyebrow,
+  screenTitle: typography.display,
+  screenSubtitle: typography.bodyMuted,
+  listGap: space(3),
+  cardGap: space(3),
+  horizontalPad: space(6),
+};
+
 export const theme = {
   colors: palette,
   radius,
@@ -237,4 +282,7 @@ export const theme = {
   typography,
   glow,
   space,
+  tabBar,
+  buttons,
+  ui,
 };

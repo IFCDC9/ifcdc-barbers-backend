@@ -3,7 +3,7 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 import ProfileCard from "../../components/ProfileCard";
 import { useAuth } from "../../services/authContext";
 import { canAccessUserManagement } from "../../utils/userManagementAccess";
-import { theme } from "../../constants/theme";
+import { palette, typography } from "../../constants/theme";
 
 export type AdminMenuItem = {
   key: string;
@@ -114,7 +114,7 @@ const styles = StyleSheet.create({
   rowInner: { flexDirection: "row", alignItems: "center", gap: 12 },
   icon: { fontSize: 22, width: 32, textAlign: "center" },
   copy: { flex: 1, gap: 2 },
-  title: { color: theme.colors.text, fontSize: 16, fontWeight: "700" },
-  subtitle: { color: theme.colors.textMuted, fontSize: 13, lineHeight: 18 },
-  chevron: { color: theme.colors.gold, fontSize: 22, fontWeight: "300" },
+  title: { ...typography.heading, fontSize: 16 },
+  subtitle: { ...typography.caption, lineHeight: 18 },
+  chevron: { color: palette.gold, fontSize: 22, fontWeight: "300" },
 });

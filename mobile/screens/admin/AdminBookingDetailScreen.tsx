@@ -382,17 +382,31 @@ export default function AdminBookingDetailScreen() {
           }
           disabled={busy}
         />
-        <GlowButton
-          label="Resend confirmation"
-          variant="outline"
-          onPress={() => void onResend()}
-          disabled={busy}
-          loading={busy}
-        />
-        <GlowButton label="Contact customer" variant="outline" onPress={onContact} disabled={busy} />
+        <View style={styles.actionRow}>
+          <GlowButton
+            label="Resend confirmation"
+            variant="outline"
+            size="compact"
+            onPress={() => void onResend()}
+            disabled={busy}
+            loading={busy}
+            style={styles.actionHalf}
+            fullWidth={false}
+          />
+          <GlowButton
+            label="Contact customer"
+            variant="outline"
+            size="compact"
+            onPress={onContact}
+            disabled={busy}
+            style={styles.actionHalf}
+            fullWidth={false}
+          />
+        </View>
         <GlowButton
           label="Cancel booking"
-          variant="outline"
+          variant="secondary"
+          size="compact"
           onPress={() =>
             runAction("Cancel booking", "Cancel this appointment? The record stays in admin history.", "cancel")
           }
@@ -400,23 +414,29 @@ export default function AdminBookingDetailScreen() {
         />
 
         {canDestructive ? (
-          <>
+          <View style={styles.destructiveRow}>
             {showRefund ? (
               <GlowButton
                 label="Refund Client"
                 variant="danger"
+                size="compact"
                 onPress={onRefundClient}
                 disabled={busy}
                 loading={busy}
+                style={styles.actionHalf}
+                fullWidth={false}
               />
             ) : null}
             <GlowButton
               label="Delete Booking"
               variant="danger"
+              size="compact"
               onPress={onDeleteBooking}
               disabled={busy}
+              style={showRefund ? styles.actionHalf : styles.actionFull}
+              fullWidth={!showRefund}
             />
-          </>
+          </View>
         ) : null}
       </View>
     </ProfileScreenLayout>
@@ -463,4 +483,8 @@ const styles = StyleSheet.create({
     fontStyle: "italic",
   },
   actions: { gap: 10, marginTop: 4, marginBottom: 8 },
+  actionRow: { flexDirection: "row", gap: 10 },
+  destructiveRow: { flexDirection: "row", gap: 10, marginTop: 2 },
+  actionHalf: { flex: 1, width: undefined },
+  actionFull: { width: "100%" },
 });

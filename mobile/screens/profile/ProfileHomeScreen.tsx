@@ -10,7 +10,7 @@ import ProfileCard from "../../components/ProfileCard";
 import ProfileAmbientBackground from "../../components/ProfileAmbientBackground";
 import GlowButton from "../../components/GlowButton";
 import { profileHomeBottomPad } from "../../constants/profileLayout";
-import { theme } from "../../constants/theme";
+import { palette, typography, ui } from "../../constants/theme";
 import type { ProfileStackParamList } from "../../navigation/ProfileStack";
 
 function initialsFrom(name: string, email: string): string {
@@ -66,7 +66,7 @@ export default function ProfileHomeScreen() {
         <Text style={styles.screenTitle}>{t("profile.title")}</Text>
         <Text style={styles.screenSub}>{t("profile.accountHeader")}</Text>
 
-        <ProfileCard style={styles.headerCard}>
+        <ProfileCard glow style={styles.headerCard}>
           {avatarUri ? (
             <Image source={{ uri: avatarUri }} style={styles.avatarImage} />
           ) : (
@@ -120,24 +120,24 @@ export default function ProfileHomeScreen() {
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: theme.colors.bg0 },
+  root: { flex: 1, backgroundColor: palette.bg0 },
   scroll: { flex: 1, zIndex: 1 },
-  content: { paddingHorizontal: 24, paddingTop: 8, gap: 20 },
-  screenTitle: { fontSize: 28, fontWeight: "800", color: theme.colors.text },
-  screenSub: { color: theme.colors.textMuted, fontSize: 15, marginTop: -12, marginBottom: 4 },
+  content: { paddingHorizontal: ui.horizontalPad, paddingTop: 8, gap: ui.cardGap + 4 },
+  screenTitle: { ...ui.screenTitle, marginBottom: 2 },
+  screenSub: { ...ui.sectionTitle, marginTop: -8, marginBottom: 8 },
   headerCard: { alignItems: "center", paddingVertical: 28, paddingHorizontal: 20 },
   avatarRing: {
     padding: 3,
     borderRadius: 48,
     borderWidth: 1,
-    borderColor: theme.colors.borderGold,
+    borderColor: palette.borderGold,
     marginBottom: 16,
   },
   avatar: {
     width: 72,
     height: 72,
     borderRadius: 36,
-    backgroundColor: theme.colors.bg1,
+    backgroundColor: palette.bg1,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -147,11 +147,11 @@ const styles = StyleSheet.create({
     borderRadius: 39,
     marginBottom: 16,
     borderWidth: 1,
-    borderColor: theme.colors.borderGold,
+    borderColor: palette.borderGold,
   },
-  avatarText: { color: theme.colors.gold, fontSize: 22, fontWeight: "900" },
-  userName: { color: theme.colors.text, fontSize: 22, fontWeight: "800", marginBottom: 6 },
-  userEmail: { color: theme.colors.textMuted, fontSize: 15 },
+  avatarText: { color: palette.gold, fontSize: 22, fontWeight: "900" },
+  userName: { ...typography.title, marginBottom: 6 },
+  userEmail: { ...typography.bodyMuted },
   menuCard: { paddingVertical: 4, paddingHorizontal: 0 },
   menuRow: {
     flexDirection: "row",
@@ -165,7 +165,7 @@ const styles = StyleSheet.create({
     borderBottomColor: "rgba(255,255,255,0.08)",
   },
   menuRowPressed: { backgroundColor: "rgba(245,200,66,0.06)" },
-  menuLabel: { color: theme.colors.text, fontSize: 16, fontWeight: "600" },
-  menuChevron: { color: theme.colors.gold, fontSize: 22, fontWeight: "300" },
+  menuLabel: { ...typography.heading, fontSize: 16, fontWeight: "600" },
+  menuChevron: { color: palette.gold, fontSize: 22, fontWeight: "300" },
   signOutCard: { marginTop: 4 },
 });

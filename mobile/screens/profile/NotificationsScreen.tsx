@@ -27,7 +27,8 @@ import {
   DEFAULT_SERVER_PREFS,
   type ServerNotificationPreferences,
 } from "../../services/pushApi";
-import { theme } from "../../constants/theme";
+import TextChip from "../../components/TextChip";
+import { palette, radius, shadow, theme, typography, ui } from "../../constants/theme";
 import { userFacingApiError } from "../../utils/userFacingApiError";
 import { confirmDelete } from "../../utils/confirmDelete";
 import {
@@ -61,8 +62,8 @@ function PrefRow({
         value={value}
         onValueChange={onValueChange}
         disabled={disabled}
-        trackColor={{ false: "#333", true: "rgba(245,200,66,0.45)" }}
-        thumbColor={value ? theme.colors.gold : "#888"}
+        trackColor={{ false: palette.bg2, true: "rgba(245,200,66,0.45)" }}
+        thumbColor={value ? palette.gold : palette.textDim}
       />
     </View>
   );
@@ -214,7 +215,9 @@ export default function NotificationsScreen() {
         <ProfileCard style={styles.card}>
           <View style={styles.feedHeader}>
             <Text style={styles.section}>Recent alerts</Text>
-            <Pressable
+            <TextChip
+              label="Clear all"
+              variant="muted"
               onPress={() => {
                 void (async () => {
                   if (!(await confirmDelete("Clear all recent alerts on this device?"))) return;
@@ -222,17 +225,17 @@ export default function NotificationsScreen() {
                   setFeed([]);
                 })();
               }}
-            >
-              <Text style={styles.clearFeed}>Clear all</Text>
-            </Pressable>
+            />
           </View>
           {feed.map((item) => (
-            <View key={item.id} style={styles.feedRow}>
+            <View key={item.id} style={styles.alertCard}>
               <View style={styles.feedCopy}>
                 <Text style={styles.feedTitle}>{item.title}</Text>
                 <Text style={styles.feedBody}>{item.body}</Text>
               </View>
-              <Pressable
+              <TextChip
+                label="Delete"
+                variant="danger"
                 onPress={() => {
                   void (async () => {
                     if (!(await confirmDelete())) return;
@@ -240,10 +243,7 @@ export default function NotificationsScreen() {
                     setFeed(await loadNotificationFeed());
                   })();
                 }}
-                hitSlop={8}
-              >
-                <Text style={styles.feedDelete}>Delete</Text>
-              </Pressable>
+              />
             </View>
           ))}
         </ProfileCard>
@@ -390,16 +390,11 @@ export default function NotificationsScreen() {
 const styles = StyleSheet.create({
   card: { gap: 4 },
   section: {
-    color: theme.colors.gold,
-    fontSize: 12,
-    fontWeight: "800",
-    letterSpacing: 1.5,
+    ...ui.sectionTitle,
     marginBottom: 8,
   },
   emailNote: {
-    color: theme.colors.textMuted,
-    fontSize: 14,
-    lineHeight: 20,
+    ...typography.bodyMuted,
   },
   statusRow: {
     flexDirection: "row",
@@ -446,17 +441,19 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 8,
   },
-  clearFeed: { color: theme.colors.textMuted, fontSize: 13, fontWeight: "700" },
-  feedRow: {
+  alertCard: {
     flexDirection: "row",
     alignItems: "flex-start",
     gap: 10,
-    paddingVertical: 10,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: "rgba(255,255,255,0.08)",
+    padding: 12,
+    marginBottom: 8,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: palette.borderGold,
+    backgroundColor: palette.surfaceLo,
+    ...shadow.glowGoldSoft,
   },
   feedCopy: { flex: 1, gap: 4 },
-  feedTitle: { color: theme.colors.text, fontSize: 15, fontWeight: "700" },
-  feedBody: { color: theme.colors.textMuted, fontSize: 13, lineHeight: 18 },
-  feedDelete: { color: "#e57373", fontSize: 13, fontWeight: "700" },
+  feedTitle: { ...typography.heading, fontSize: 15 },
+  feedBody: { ...typography.caption, lineHeight: 18 },
 });

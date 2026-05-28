@@ -28,9 +28,11 @@ type Nav = StackNavigationProp<AdminStackParamList, "AdminBookings">;
 function BookingCard({
   row,
   onPress,
+  onDelete,
 }: {
   row: BookingRow;
   onPress: () => void;
+  onDelete?: () => void;
 }) {
   const when = formatBookingDateTime(row.date, row.time, row.created_at);
   const customerLine = `${displayCustomerName(row.customer_name, row.customer_email)} · ${displayCustomerEmail(row.customer_email)}`;
@@ -39,6 +41,7 @@ function BookingCard({
     <Pressable
       onPress={onPress}
       onLongPress={onDelete}
+      disabled={!onDelete}
       style={({ pressed }) => [pressed && styles.cardPressed]}
       accessibilityRole="button"
       accessibilityLabel={`Open booking for ${row.service || "appointment"}`}

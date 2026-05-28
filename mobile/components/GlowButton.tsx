@@ -10,9 +10,10 @@ import {
   View,
   ViewStyle,
 } from "react-native";
-import { palette, radius, shadow, typography } from "../constants/theme";
+import { buttons, palette, radius, shadow, typography } from "../constants/theme";
 
 type Variant = "primary" | "outline" | "secondary" | "danger";
+type Size = "default" | "compact";
 
 type Props = {
   label: string;
@@ -22,10 +23,13 @@ type Props = {
   style?: StyleProp<ViewStyle>;
   textStyle?: StyleProp<TextStyle>;
   variant?: Variant;
+  size?: Size;
   /** Optional small icon element rendered to the left of the label. */
   iconLeft?: React.ReactNode;
   /** Optional small icon element rendered to the right of the label. */
   iconRight?: React.ReactNode;
+  /** When false, button sizes to content / flex parent (e.g. compact admin rows). */
+  fullWidth?: boolean;
 };
 
 export default function GlowButton({
@@ -36,8 +40,10 @@ export default function GlowButton({
   style,
   textStyle,
   variant = "primary",
+  size = "default",
   iconLeft,
   iconRight,
+  fullWidth = true,
 }: Props) {
   const scale = useRef(new Animated.Value(1)).current;
   const isDisabled = disabled || loading;
@@ -70,7 +76,7 @@ export default function GlowButton({
         : palette.gold;
 
   return (
-    <Animated.View style={{ transform: [{ scale }], width: "100%" }}>
+    <Animated.View style={{ transform: [{ scale }], width: fullWidth ? "100%" : undefined, flex: fullWidth ? undefined : 1 }}>
       <Pressable
         onPress={onPress}
         disabled={isDisabled}
@@ -78,6 +84,7 @@ export default function GlowButton({
         onPressOut={pressOut}
         style={({ pressed }) => [
           styles.btn,
+          size === "compact" && styles.btnCompact,
           variantStyles.base,
           pressed && !isDisabled && variantStyles.pressed,
           isDisabled && styles.disabled,
@@ -152,8 +159,9 @@ function stylesByVariant(variant: Variant) {
 const styles = StyleSheet.create({
   btn: {
     borderRadius: radius.md,
-    paddingVertical: 14,
-    paddingHorizontal: 16,
+    minHeight: buttons.minHeight,
+    paddingVertical: buttons.paddingVertical,
+    paddingHorizontal: buttons.paddingHorizontal,
     alignItems: "center",
     justifyContent: "center",
     overflow: "hidden",
@@ -202,23 +210,32 @@ const styles = StyleSheet.create({
   },
 
   secondary: {
-    backgroundColor: palette.bg2,
+    backgroundColor: palette.surface,
     borderWidth: 1,
-    borderColor: palette.hairline,
+    borderColor: palette.borderGold,
+    ...shadow.soft,
   },
   secondaryPressed: {
-    backgroundColor: "#181818",
+    backgroundColor: palette.surfaceHi,
   },
 
   danger: {
-    backgroundColor: palette.danger,
+    backgroundColor: "rgba(220, 72, 72, 0.92)",
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.18)",
+    borderColor: "rgba(255,140,140,0.45)",
+    minHeight: buttons.minHeightCompact,
+    paddingVertical: buttons.paddingVerticalCompact,
     ...shadow.glowDanger,
   },
   dangerPressed: {
-    backgroundColor: "#e35454",
+    backgroundColor: "rgba(190, 55, 55, 0.95)",
     transform: [{ translateY: 1 }],
+  },
+
+  btnCompact: {
+    minHeight: buttons.minHeightCompact,
+    paddingVertical: buttons.paddingVerticalCompact,
+    paddingHorizontal: 14,
   },
 
   disabled: { opacity: 0.45 },

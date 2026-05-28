@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ActivityIndicator,
   Alert,
   Animated,
   Easing,
@@ -15,9 +14,10 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTranslation } from "react-i18next";
-import { theme } from "../constants/theme";
+import { palette, radius, shadow, theme, typography } from "../constants/theme";
 import GlowButton from "./GlowButton";
 import ProfileCard from "./ProfileCard";
+import TextChip from "./TextChip";
 import { useAuth } from "../services/authContext";
 import {
   sendAuraChatMessage,
@@ -37,6 +37,44 @@ import {
 import { confirmDelete } from "../utils/confirmDelete";
 
 type Msg = StoredAuraMessage;
+
+function TypingDots() {
+  const a = useRef(new Animated.Value(0.35)).current;
+  const b = useRef(new Animated.Value(0.35)).current;
+  const c = useRef(new Animated.Value(0.35)).current;
+
+  useEffect(() => {
+    const pulse = (v: Animated.Value, delay: number) =>
+      Animated.loop(
+        Animated.sequence([
+          Animated.delay(delay),
+          Animated.timing(v, { toValue: 1, duration: 380, useNativeDriver: true }),
+          Animated.timing(v, { toValue: 0.35, duration: 380, useNativeDriver: true }),
+        ]),
+      );
+    const loops = [pulse(a, 0), pulse(b, 140), pulse(c, 280)];
+    loops.forEach((l) => l.start());
+    return () => loops.forEach((l) => l.stop());
+  }, [a, b, c]);
+
+  return (
+    <View style={typingStyles.row}>
+      {[a, b, c].map((v, i) => (
+        <Animated.View key={i} style={[typingStyles.dot, { opacity: v, transform: [{ scale: v }] }]} />
+      ))}
+    </View>
+  );
+}
+
+const typingStyles = StyleSheet.create({
+  row: { flexDirection: "row", alignItems: "center", gap: 5, paddingHorizontal: 2 },
+  dot: {
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+    backgroundColor: palette.gold,
+  },
+});
 
 /** Embedded text-only AURA chat (no modal, no voice). */
 export default function AuraChatPanel() {
@@ -251,9 +289,7 @@ export default function AuraChatPanel() {
           <Text style={styles.subtitle}>{t("aura.tagline")}</Text>
         </View>
         {messages.length > 0 ? (
-          <Pressable onPress={clearConversation} hitSlop={8} accessibilityRole="button">
-            <Text style={styles.clearLink}>Clear</Text>
-          </Pressable>
+          <TextChip label="Clear" variant="muted" onPress={clearConversation} />
         ) : null}
       </View>
 
@@ -272,8 +308,8 @@ export default function AuraChatPanel() {
           }
           ListFooterComponent={
             sending ? (
-              <View style={styles.typingRow}>
-                <ActivityIndicator size="small" color={theme.colors.gold} />
+              <View style={styles.typingBubble}>
+                <TypingDots />
                 <Text style={styles.typingText}>{t("aura.sending")}</Text>
               </View>
             ) : null
@@ -292,17 +328,27 @@ export default function AuraChatPanel() {
         ) : null}
 
         <View style={[styles.composer, { paddingBottom: Math.max(insets.bottom, 4) }]}>
-          <TextInput
-            value={text}
-            onChangeText={setText}
-            placeholder={t("aura.placeholder")}
-            placeholderTextColor="rgba(255,255,255,0.45)"
-            style={styles.input}
-            editable={!sending}
-            returnKeyType="send"
-            onSubmitEditing={send}
-          />
-          <GlowButton label={t("aura.send")} onPress={send} disabled={!canSend} loading={sending} />
+          <View style={styles.composerRow}>
+            <TextInput
+              value={text}
+              onChangeText={setText}
+              placeholder={t("aura.placeholder")}
+              placeholderTextColor={palette.textDim}
+              style={styles.input}
+              editable={!sending}
+              returnKeyType="send"
+              onSubmitEditing={send}
+            />
+            <GlowButton
+              label={t("aura.send")}
+              onPress={send}
+              disabled={!canSend}
+              loading={sending}
+              size="compact"
+              style={styles.sendBtn}
+              fullWidth={false}
+            />
+          </View>
         </View>
       </ProfileCard>
     </KeyboardAvoidingView>
@@ -334,11 +380,12 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: theme.colors.card,
+    backgroundColor: palette.surfaceHi,
     borderWidth: 1.5,
-    borderColor: theme.colors.borderGold,
+    borderColor: palette.borderGoldStrong,
     alignItems: "center",
     justifyContent: "center",
+    ...shadow.glowGoldSoft,
   },
   orbInnerRing: {
     position: "absolute",
@@ -351,65 +398,72 @@ const styles = StyleSheet.create({
     borderColor: "rgba(245,200,66,0.36)",
   },
   orbLabel: {
-    color: theme.colors.gold,
+    color: palette.gold,
     fontWeight: "900",
     fontSize: 9,
     letterSpacing: 1.2,
   },
   headerText: { flex: 1 },
-  clearLink: {
-    color: theme.colors.textMuted,
-    fontSize: 13,
-    fontWeight: "700",
-    textDecorationLine: "underline",
-  },
-  title: { color: theme.colors.text, fontWeight: "900", fontSize: 20 },
-  subtitle: { color: theme.colors.textMuted, marginTop: 4, fontSize: 13 },
+  title: { ...typography.title, fontSize: 20 },
+  subtitle: { ...typography.bodyMuted, marginTop: 4, fontSize: 13 },
   chatCard: { flex: 1, padding: 14, minHeight: 280 },
   list: { gap: 10, paddingVertical: 4, paddingBottom: 8, flexGrow: 1 },
   welcomeBox: { gap: 8, paddingVertical: 8 },
-  welcomeTitle: { color: theme.colors.gold, fontSize: 16, fontWeight: "800" },
-  emptyHint: { color: theme.colors.text, fontSize: 15, lineHeight: 22 },
+  welcomeTitle: { color: palette.gold, fontSize: 16, fontWeight: "800" },
+  emptyHint: { color: palette.text, fontSize: 15, lineHeight: 22 },
   retryBtn: { marginTop: 8, alignSelf: "flex-start" },
-  typingRow: {
+  typingBubble: {
+    alignSelf: "flex-start",
     flexDirection: "row",
     alignItems: "center",
-    gap: 8,
-    paddingVertical: 8,
-    paddingHorizontal: 4,
+    gap: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: palette.borderGold,
+    backgroundColor: palette.surfaceLo,
+    marginTop: 4,
+    ...shadow.glowGoldSoft,
   },
-  typingText: { color: theme.colors.textMuted, fontSize: 13 },
+  typingText: { ...typography.caption, color: palette.textMuted },
   bubble: {
     maxWidth: "88%",
     paddingHorizontal: 14,
     paddingVertical: 11,
-    borderRadius: 16,
+    borderRadius: radius.lg,
     borderWidth: 1,
   },
   bubbleUser: {
     alignSelf: "flex-end",
-    backgroundColor: theme.colors.gold,
-    borderColor: "rgba(245,200,66,0.65)",
-    borderTopRightRadius: 4,
+    backgroundColor: palette.gold,
+    borderColor: palette.goldHigh,
+    borderTopRightRadius: radius.xs,
+    ...shadow.glowGoldSoft,
   },
   bubbleAi: {
     alignSelf: "flex-start",
-    backgroundColor: "rgba(255,255,255,0.04)",
-    borderColor: "rgba(245,200,66,0.18)",
-    borderTopLeftRadius: 4,
+    backgroundColor: palette.surface,
+    borderColor: palette.borderGold,
+    borderTopLeftRadius: radius.xs,
+    ...shadow.soft,
   },
-  bubbleText: { fontSize: 14, lineHeight: 20 },
-  userText: { color: "#111", fontWeight: "700" },
-  aiText: { color: theme.colors.text, fontWeight: "600" },
-  composer: { marginTop: 10, gap: 10 },
+  bubbleText: { fontSize: 14, lineHeight: 21 },
+  userText: { color: "#0a0a0a", fontWeight: "700" },
+  aiText: { color: palette.text, fontWeight: "600" },
+  composer: { marginTop: 10 },
+  composerRow: { flexDirection: "row", alignItems: "flex-end", gap: 10 },
   input: {
-    backgroundColor: "rgba(255,255,255,0.04)",
+    flex: 1,
+    backgroundColor: palette.surfaceLo,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.10)",
-    borderRadius: theme.radius.md,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    color: theme.colors.text,
+    borderColor: palette.borderGold,
+    borderRadius: radius.md,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    color: palette.text,
     fontSize: 14,
+    minHeight: 44,
   },
+  sendBtn: { width: 108, alignSelf: "flex-end" },
 });
