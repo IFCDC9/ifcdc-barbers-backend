@@ -40,6 +40,23 @@ import {
   paymentStatusHeadline,
 } from '../utils/bookingDisplay';
 import { formatCheckoutError } from '../utils/checkoutError';
+import DarkGradientBackground from '../components/DarkGradientBackground';
+import { palette, radius } from '../constants/theme';
+
+/** Visual tokens only — booking/payment logic unchanged */
+const UI = {
+  bg: palette.bg0,
+  card: palette.bg2,
+  gold: palette.gold,
+  text: palette.text,
+  muted: palette.textMuted,
+  dim: palette.textDim,
+  border: palette.borderGold,
+  success: palette.success,
+  warning: palette.warning,
+  danger: palette.danger,
+  onGold: '#0a0a0a',
+};
 
 const FALLBACK_SERVICE_PRICE = 25;
 
@@ -446,10 +463,12 @@ function BookingScreen() {
   if (step === 6 && successPayload) {
     return (
       <SafeAreaView
-        style={{ flex: 1, backgroundColor: '#000' }}
+        style={{ flex: 1, backgroundColor: UI.bg }}
         edges={['top', 'left', 'right', 'bottom']}
       >
+        <DarkGradientBackground />
         <ScrollView
+          style={{ flex: 1 }}
           contentContainerStyle={{
             padding: 20,
             paddingBottom: bottomPad + 24,
