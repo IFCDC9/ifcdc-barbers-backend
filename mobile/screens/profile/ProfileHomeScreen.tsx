@@ -84,7 +84,7 @@ export default function ProfileHomeScreen() {
           {menu.map((item, index) => (
             <Pressable
               key={item.key}
-              onPress={() => navigation.navigate(item.key)}
+              onPress={() => navigation.navigate(item.key as never)}
               hitSlop={8}
               style={({ pressed }) => [
                 styles.menuRow,

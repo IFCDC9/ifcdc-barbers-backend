@@ -28,11 +28,11 @@ type Nav = StackNavigationProp<AdminStackParamList, "AdminBookings">;
 function BookingCard({
   row,
   onPress,
-  onDelete,
+  onDelete = () => {},
 }: {
   row: BookingRow;
   onPress: () => void;
-  onDelete?: () => void;
+  onDelete?: (bookingId: string) => void;
 }) {
   const when = formatBookingDateTime(row.date, row.time, row.created_at);
   const customerLine = `${displayCustomerName(row.customer_name, row.customer_email)} · ${displayCustomerEmail(row.customer_email)}`;
@@ -40,8 +40,16 @@ function BookingCard({
   return (
     <Pressable
       onPress={onPress}
-      onLongPress={onDelete}
-      disabled={!onDelete}
+      onLongPress={() => {
+        Alert.alert("Delete Booking", "Are you sure?", [
+          { text: "Cancel", style: "cancel" },
+          {
+            text: "Delete",
+            style: "destructive",
+            onPress: () => onDelete(String(row.id)),
+          },
+        ]);
+      }}
       style={({ pressed }) => [pressed && styles.cardPressed]}
       accessibilityRole="button"
       accessibilityLabel={`Open booking for ${row.service || "appointment"}`}
@@ -116,11 +124,10 @@ export default function AdminBookingsScreen() {
     : "Platform-wide booking management";
 
   const deleteRow = useCallback(
-    async (row: BookingRow) => {
+    async (bookingId: string) => {
       if (!canAdminDelete) return;
-      if (!(await confirmDelete())) return;
       try {
-        await deleteAdminBooking(String(row.id));
+        await deleteAdminBooking(bookingId);
         await load();
       } catch (e) {
         Alert.alert("Delete failed", userFacingApiError(e));
@@ -142,7 +149,11 @@ export default function AdminBookingsScreen() {
             onPress={() =>
               navigation.navigate("AdminBookingDetail", { bookingId: String(row.id) })
             }
-            onDelete={canAdminDelete ? () => void deleteRow(row) : undefined}
+            onDelete={
+              canAdminDelete
+                ? (bookingId) => void deleteRow(bookingId)
+                : () => {}
+            }
           />
         ))}
       </View>
