@@ -1,11 +1,13 @@
 import React from "react";
-import { Alert, StyleSheet, Text, TextInput, View } from "react-native";
+import { Alert, StyleSheet, Text, View } from "react-native";
 import * as Google from "expo-auth-session/providers/google";
 import { useTranslation } from "react-i18next";
 import CardContainer from "../components/CardContainer";
 import GlowButton from "../components/GlowButton";
 import GoogleButton from "../components/GoogleButton";
-import { theme } from "../constants/theme";
+import IFCDCInput from "../components/IFCDCInput";
+import AppFooter from "../components/AppFooter";
+import { palette, radius, typography } from "../constants/theme";
 import { BACKEND_URL, apiFullUrl } from "../constants/config";
 import { useAuth } from "../services/authContext";
 import { EXPO_GO_GOOGLE_PROMPT_OPTIONS } from "../auth/expoGooglePromptOptions";
@@ -174,6 +176,7 @@ export default function LoginScreen({ navigation }: { navigation: any }) {
   return (
     <View style={styles.container}>
       <View pointerEvents="none" style={styles.glowOrb} />
+      <View style={styles.main}>
       <Text style={styles.brand}>IFCDC BARBER</Text>
       <View style={styles.brandUnderline} />
       <Text style={styles.title}>{t("auth.signInTitle")}</Text>
@@ -199,24 +202,20 @@ export default function LoginScreen({ navigation }: { navigation: any }) {
           </>
         )}
 
-        <TextInput
+        <IFCDCInput
           value={email}
           onChangeText={setEmail}
           placeholder={t("auth.email")}
-          placeholderTextColor="rgba(255,255,255,0.45)"
           autoCapitalize="none"
           keyboardType="email-address"
-          style={styles.input}
           editable={!busy}
         />
         <View style={{ height: 10 }} />
-        <TextInput
+        <IFCDCInput
           value={password}
           onChangeText={setPassword}
           placeholder={t("auth.password")}
-          placeholderTextColor="rgba(255,255,255,0.45)"
           secureTextEntry
-          style={styles.input}
           editable={!busy}
         />
         <View style={{ height: 12 }} />
@@ -230,6 +229,8 @@ export default function LoginScreen({ navigation }: { navigation: any }) {
           disabled={busy}
         />
       </CardContainer>
+      </View>
+      <AppFooter />
     </View>
   );
 }
@@ -237,8 +238,13 @@ export default function LoginScreen({ navigation }: { navigation: any }) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: theme.colors.bg0,
+    backgroundColor: palette.bg0,
     padding: 20,
+    paddingBottom: 12,
+  },
+  main: {
+    flex: 1,
+    width: "100%",
     justifyContent: "center",
     alignItems: "center",
     gap: 6,
@@ -251,34 +257,24 @@ const styles = StyleSheet.create({
     width: 320,
     height: 320,
     borderRadius: 160,
-    backgroundColor: "rgba(245,200,66,0.06)",
+    backgroundColor: "rgba(212,175,55,0.06)",
   },
-  brand: { color: theme.colors.gold, fontWeight: "900", fontSize: 18, letterSpacing: 1.8 },
+  brand: { ...typography.brand },
   brandUnderline: {
     width: 28,
     height: 2,
     borderRadius: 2,
-    backgroundColor: theme.colors.goldSoft,
+    backgroundColor: palette.goldHigh,
     marginTop: 4,
     marginBottom: 6,
   },
-  title: { color: theme.colors.text, fontWeight: "900", fontSize: 28, marginTop: 4 },
+  title: { ...typography.display, marginTop: 4 },
   tagline: {
-    color: theme.colors.textMuted,
+    ...typography.bodyMuted,
     fontSize: 12.5,
     marginBottom: 14,
     letterSpacing: 0.4,
   },
-  helper: { color: theme.colors.textMuted, textAlign: "center", fontSize: 12 },
-  or: { color: theme.colors.textMuted, textAlign: "center", fontWeight: "700", letterSpacing: 1.6 },
-  input: {
-    backgroundColor: "rgba(255,255,255,0.05)",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.10)",
-    borderRadius: theme.radius.md,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    color: theme.colors.text,
-    fontSize: 14.5,
-  },
+  helper: { ...typography.caption, textAlign: "center" },
+  or: { ...typography.caption, textAlign: "center", fontWeight: "700", letterSpacing: 1.6 },
 });

@@ -70,7 +70,7 @@ export default function GlowButton({
 
   const labelColor =
     variant === "primary"
-      ? "#101010"
+      ? palette.onGold
       : variant === "danger"
         ? "#fff"
         : palette.gold;
@@ -107,7 +107,7 @@ export default function GlowButton({
           {loading ? (
             <ActivityIndicator
               size="small"
-              color={variant === "primary" ? "#101010" : palette.gold}
+              color={variant === "primary" ? palette.onGold : palette.gold}
               style={styles.spinner}
             />
           ) : (

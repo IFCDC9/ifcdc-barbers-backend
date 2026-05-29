@@ -418,7 +418,7 @@ export default function AdminBookingDetailScreen() {
             {showRefund ? (
               <GlowButton
                 label="Refund Client"
-                variant="danger"
+                variant="secondary"
                 size="compact"
                 onPress={onRefundClient}
                 disabled={busy}

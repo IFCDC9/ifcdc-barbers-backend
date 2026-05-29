@@ -41,21 +41,26 @@ import {
 } from '../utils/bookingDisplay';
 import { formatCheckoutError } from '../utils/checkoutError';
 import DarkGradientBackground from '../components/DarkGradientBackground';
+import AppFooter from '../components/AppFooter';
 import { palette, radius } from '../constants/theme';
 
 /** Visual tokens only — booking/payment logic unchanged */
 const UI = {
   bg: palette.bg0,
-  card: palette.bg2,
+  card: palette.card,
+  surface: palette.bg2,
   gold: palette.gold,
+  goldSoft: palette.goldHigh,
   text: palette.text,
   muted: palette.textMuted,
   dim: palette.textDim,
   border: palette.borderGold,
+  borderStrong: palette.borderGoldStrong,
+  glass: palette.surfaceLine,
   success: palette.success,
   warning: palette.warning,
   danger: palette.danger,
-  onGold: '#0a0a0a',
+  onGold: palette.onGold,
 };
 
 const FALLBACK_SERVICE_PRICE = 25;
@@ -475,32 +480,32 @@ function BookingScreen() {
           }}
           showsVerticalScrollIndicator={false}
         >
-          <Text style={{ color: '#FFD700', fontSize: 26, fontWeight: '700', marginBottom: 8 }}>
+          <Text style={{ color: UI.gold, fontSize: 26, fontWeight: '700', marginBottom: 8 }}>
             {t('booking.confirmedTitle')}
           </Text>
-          <Text style={{ color: '#888', marginBottom: 20 }}>{phaseLabel}</Text>
+          <Text style={{ color: UI.muted, marginBottom: 20 }}>{phaseLabel}</Text>
 
           <View
             style={{
               height: 120,
-              backgroundColor: '#111',
-              borderRadius: 12,
+              backgroundColor: UI.card,
+              borderRadius: radius.lg,
               justifyContent: 'center',
               alignItems: 'center',
               marginBottom: 24,
               borderWidth: 1,
-              borderColor: '#222',
+              borderColor: UI.border,
             }}
           >
-            <Text style={{ color: '#FFD700', fontSize: 16 }}>✓</Text>
-            <Text style={{ color: '#666', marginTop: 8, fontSize: 13 }}>
+            <Text style={{ color: UI.gold, fontSize: 16 }}>✓</Text>
+            <Text style={{ color: UI.dim, marginTop: 8, fontSize: 13 }}>
               {t('booking.confirmedTitle')}
             </Text>
           </View>
 
-          <View style={{ backgroundColor: '#111', borderRadius: 12, padding: 16, marginBottom: 16 }}>
-            <Text style={{ color: '#fff', marginBottom: 6 }}>
-              <Text style={{ color: '#888' }}>{t('booking.service')} </Text>
+          <View style={{ backgroundColor: UI.card, borderRadius: radius.lg, padding: 16, marginBottom: 16, borderWidth: 1, borderColor: UI.border }}>
+            <Text style={{ color: UI.text, marginBottom: 6 }}>
+              <Text style={{ color: UI.muted }}>{t('booking.service')} </Text>
               {successPayload.service || '—'}
             </Text>
             <Text style={{ color: '#fff', marginBottom: 6 }}>
@@ -597,13 +602,15 @@ function BookingScreen() {
               {t('common.done')}
             </Text>
           </TouchableOpacity>
+
+          <AppFooter />
         </ScrollView>
       </SafeAreaView>
     );
   }
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: '#000' }} edges={['top', 'left', 'right']}>
+    <SafeAreaView style={{ flex: 1, backgroundColor: UI.bg }} edges={['top', 'left', 'right']}>
       <ScrollView
         contentContainerStyle={{
           padding: 20,
@@ -869,6 +876,7 @@ function BookingScreen() {
             </TouchableOpacity>
           </View>
         )}
+        <AppFooter />
       </ScrollView>
     </SafeAreaView>
   );
@@ -878,21 +886,21 @@ const styles = StyleSheet.create({
   rowBtn: {
     padding: 15,
     marginBottom: 10,
-    backgroundColor: '#111',
-    borderRadius: 10,
+    backgroundColor: UI.card,
+    borderRadius: radius.sm,
     borderWidth: 1,
-    borderColor: 'rgba(245,200,66,0.2)',
+    borderColor: UI.border,
   },
   barbersErrorBox: {
     marginBottom: 14,
     padding: 14,
-    borderRadius: 12,
+    borderRadius: radius.md,
     borderWidth: 1,
-    borderColor: 'rgba(245,200,66,0.32)',
-    backgroundColor: 'rgba(255,255,255,0.04)',
+    borderColor: UI.borderStrong,
+    backgroundColor: UI.glass,
   },
   barbersErrorText: {
-    color: '#f88',
+    color: UI.danger,
     fontSize: 13,
     lineHeight: 18,
     marginBottom: 12,
@@ -901,73 +909,73 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
     paddingHorizontal: 22,
     paddingVertical: 10,
-    borderRadius: 999,
-    backgroundColor: '#F5C842',
+    borderRadius: radius.pill,
+    backgroundColor: UI.gold,
     minWidth: 120,
     alignItems: 'center',
     justifyContent: 'center',
   },
   barbersRetryLabel: {
-    color: '#0b0b0b',
+    color: UI.onGold,
     fontSize: 13,
     fontWeight: '800',
     letterSpacing: 0.4,
   },
   summaryCard: {
-    backgroundColor: '#111',
-    borderRadius: 10,
+    backgroundColor: UI.card,
+    borderRadius: radius.lg,
     borderWidth: 1,
-    borderColor: 'rgba(245,200,66,0.2)',
+    borderColor: UI.border,
     padding: 16,
     marginBottom: 20,
   },
   summaryLabel: {
-    color: 'rgba(255,255,255,0.5)',
+    color: UI.muted,
     fontSize: 12,
     fontWeight: '600',
     letterSpacing: 0.5,
     textTransform: 'uppercase',
   },
   summaryValue: {
-    color: '#fff',
+    color: UI.text,
     fontSize: 17,
     fontWeight: '700',
     marginTop: 4,
   },
   sectionTitle: {
-    color: '#FFD700',
+    color: UI.gold,
     fontSize: 16,
     fontWeight: '700',
     marginBottom: 12,
   },
   hintText: {
-    color: 'rgba(255,255,255,0.55)',
+    color: UI.muted,
     fontSize: 13,
     lineHeight: 18,
     marginBottom: 10,
   },
   emptyText: {
-    color: '#888',
+    color: UI.dim,
     fontSize: 15,
     lineHeight: 22,
     marginBottom: 12,
   },
   errorText: {
-    color: '#f88',
+    color: UI.danger,
     marginBottom: 12,
     fontSize: 14,
   },
   continueBtn: {
     marginTop: 24,
     padding: 15,
-    backgroundColor: '#FFD700',
-    borderRadius: 10,
+    backgroundColor: UI.gold,
+    borderRadius: radius.md,
   },
   continueBtnDisabled: {
     opacity: 0.45,
   },
   continueBtnText: {
-    color: '#000',
+    color: UI.onGold,
     textAlign: 'center',
     fontWeight: '700',
     fontSize: 16,
@@ -978,7 +986,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   backLinkText: {
-    color: '#888',
+    color: UI.muted,
     fontSize: 14,
   },
   retryLink: {

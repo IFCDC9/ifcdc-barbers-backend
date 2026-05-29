@@ -2,6 +2,7 @@ import React from "react";
 import { StyleSheet, View } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import AuraChatPanel from "../components/AuraChatPanel";
+import AppFooter from "../components/AppFooter";
 import DarkGradientBackground from "../components/DarkGradientBackground";
 import { theme } from "../constants/theme";
 
@@ -15,7 +16,10 @@ export default function AuraScreen() {
     <SafeAreaView style={styles.root} edges={["top", "left", "right"]}>
       <DarkGradientBackground />
       <View style={[styles.content, { paddingBottom: bottomPad }]}>
-        <AuraChatPanel />
+        <View style={styles.chatWrap}>
+          <AuraChatPanel />
+        </View>
+        <AppFooter style={styles.footer} />
       </View>
     </SafeAreaView>
   );
@@ -24,4 +28,6 @@ export default function AuraScreen() {
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: theme.colors.bg0 },
   content: { flex: 1, paddingHorizontal: 20, paddingTop: 12 },
+  chatWrap: { flex: 1 },
+  footer: { paddingTop: 8, paddingBottom: 0 },
 });

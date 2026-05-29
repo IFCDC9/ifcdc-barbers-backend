@@ -6,6 +6,7 @@ import { useTranslation } from "react-i18next"
 import CardContainer from "../../components/CardContainer"
 import DarkGradientBackground from "../../components/DarkGradientBackground"
 import GlowButton from "../../components/GlowButton"
+import AppFooter from "../../components/AppFooter"
 import { palette, typography, ui } from "../../constants/theme"
 
 const HORIZONTAL_PAD = 24
@@ -50,6 +51,8 @@ const ExploreScreen = () => {
           <Text style={styles.heroCopy}>{t("home.heroCopy")}</Text>
           <GlowButton label={t("home.heroCta")} onPress={() => navigation.navigate("Book")} />
         </CardContainer>
+
+        <AppFooter />
       </ScrollView>
     </View>
   )

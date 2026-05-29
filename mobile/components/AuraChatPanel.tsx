@@ -9,12 +9,12 @@ import {
   Pressable,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTranslation } from "react-i18next";
 import { palette, radius, shadow, theme, typography } from "../constants/theme";
+import IFCDCInput from "./IFCDCInput";
 import GlowButton from "./GlowButton";
 import ProfileCard from "./ProfileCard";
 import TextChip from "./TextChip";
@@ -329,11 +329,10 @@ export default function AuraChatPanel() {
 
         <View style={[styles.composer, { paddingBottom: Math.max(insets.bottom, 4) }]}>
           <View style={styles.composerRow}>
-            <TextInput
+            <IFCDCInput
               value={text}
               onChangeText={setText}
               placeholder={t("aura.placeholder")}
-              placeholderTextColor={palette.textDim}
               style={styles.input}
               editable={!sending}
               returnKeyType="send"
@@ -436,33 +435,25 @@ const styles = StyleSheet.create({
   },
   bubbleUser: {
     alignSelf: "flex-end",
-    backgroundColor: palette.gold,
-    borderColor: palette.goldHigh,
+    backgroundColor: palette.goldDeep,
+    borderColor: palette.borderGoldStrong,
     borderTopRightRadius: radius.xs,
     ...shadow.glowGoldSoft,
   },
   bubbleAi: {
     alignSelf: "flex-start",
-    backgroundColor: palette.surface,
+    backgroundColor: palette.surfaceLo,
     borderColor: palette.borderGold,
     borderTopLeftRadius: radius.xs,
     ...shadow.soft,
   },
   bubbleText: { fontSize: 14, lineHeight: 21 },
-  userText: { color: "#0a0a0a", fontWeight: "700" },
+  userText: { color: palette.text, fontWeight: "700" },
   aiText: { color: palette.text, fontWeight: "600" },
   composer: { marginTop: 10 },
   composerRow: { flexDirection: "row", alignItems: "flex-end", gap: 10 },
   input: {
     flex: 1,
-    backgroundColor: palette.surfaceLo,
-    borderWidth: 1,
-    borderColor: palette.borderGold,
-    borderRadius: radius.md,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    color: palette.text,
-    fontSize: 14,
     minHeight: 44,
   },
   sendBtn: { width: 108, alignSelf: "flex-end" },
