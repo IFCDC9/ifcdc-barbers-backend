@@ -3,7 +3,6 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useNavigation } from "@react-navigation/native";
 import ProfileAmbientBackground from "./ProfileAmbientBackground";
-import AppFooter from "./AppFooter";
 import { profileScrollBottomPad, profileTabScrollBottomPad } from "../constants/profileLayout";
 import { palette, radius, typography } from "../constants/theme";
 
@@ -68,7 +67,6 @@ export default function ProfileScreenLayout({
         keyboardDismissMode="on-drag"
       >
         {children}
-        <AppFooter />
       </ScrollView>
     </View>
   );

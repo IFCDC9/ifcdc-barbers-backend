@@ -121,7 +121,8 @@ export default function MainRoutes() {
         )}
       </main>
       <footer style={styles.footer}>
-        <span style={styles.footerText}>© {new Date().getFullYear()} IFCDC</span>
+        <span style={styles.footerText}>© 2026 IFCDC • All Rights Reserved</span>
+        <span style={styles.footerSub}>Powered by IFCDC Productions</span>
       </footer>
     </div>
   );
@@ -148,5 +149,15 @@ const styles = {
     margin: "0 auto",
     color: theme.colors.muted,
     fontSize: 12,
+    textAlign: "center",
+  },
+  footerSub: {
+    display: "block",
+    maxWidth: 1040,
+    margin: "6px auto 0",
+    color: theme.colors.muted,
+    fontSize: 11,
+    textAlign: "center",
+    opacity: 0.85,
   },
 };

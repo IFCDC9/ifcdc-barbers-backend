@@ -6,8 +6,8 @@ import { useTranslation } from "react-i18next"
 import CardContainer from "../../components/CardContainer"
 import DarkGradientBackground from "../../components/DarkGradientBackground"
 import GlowButton from "../../components/GlowButton"
-import AppFooter from "../../components/AppFooter"
 import { palette, typography, ui } from "../../constants/theme"
+import { IFCDC_FOOTER_CLEARANCE } from "../../constants/profileLayout"
 
 const HORIZONTAL_PAD = 24
 
@@ -27,7 +27,7 @@ const ExploreScreen = () => {
         style={styles.scroll}
         contentContainerStyle={[
           styles.content,
-          { paddingTop: insets.top + 20, paddingBottom: Math.max(insets.bottom, 16) + 48 },
+          { paddingTop: insets.top + 20, paddingBottom: Math.max(insets.bottom, 16) + IFCDC_FOOTER_CLEARANCE + 24 },
         ]}
         showsVerticalScrollIndicator={false}
       >
@@ -51,8 +51,6 @@ const ExploreScreen = () => {
           <Text style={styles.heroCopy}>{t("home.heroCopy")}</Text>
           <GlowButton label={t("home.heroCta")} onPress={() => navigation.navigate("Book")} />
         </CardContainer>
-
-        <AppFooter />
       </ScrollView>
     </View>
   )

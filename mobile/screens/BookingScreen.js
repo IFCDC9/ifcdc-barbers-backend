@@ -41,8 +41,8 @@ import {
 } from '../utils/bookingDisplay';
 import { formatCheckoutError } from '../utils/checkoutError';
 import DarkGradientBackground from '../components/DarkGradientBackground';
-import AppFooter from '../components/AppFooter';
 import { palette, radius } from '../constants/theme';
+import { IFCDC_FOOTER_CLEARANCE } from '../constants/profileLayout';
 
 /** Visual tokens only — booking/payment logic unchanged */
 const UI = {
@@ -602,8 +602,6 @@ function BookingScreen() {
               {t('common.done')}
             </Text>
           </TouchableOpacity>
-
-          <AppFooter />
         </ScrollView>
       </SafeAreaView>
     );
@@ -614,7 +612,7 @@ function BookingScreen() {
       <ScrollView
         contentContainerStyle={{
           padding: 20,
-          paddingBottom: bottomPad + 72,
+          paddingBottom: bottomPad + IFCDC_FOOTER_CLEARANCE + 24,
           paddingRight: 16,
         }}
         keyboardShouldPersistTaps="handled"
@@ -876,7 +874,6 @@ function BookingScreen() {
             </TouchableOpacity>
           </View>
         )}
-        <AppFooter />
       </ScrollView>
     </SafeAreaView>
   );

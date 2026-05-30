@@ -26,6 +26,7 @@ import {
   TextInput,
   View,
 } from "react-native";
+import IFCDCFooter from "../components/IFCDCFooter";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -101,6 +102,7 @@ export default function PasswordResetScreen({ navigation }: Props) {
           <Text style={styles.secondaryText}>Back to sign in</Text>
         </Pressable>
       </View>
+      <IFCDCFooter />
     </View>
   );
 }

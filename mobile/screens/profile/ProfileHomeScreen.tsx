@@ -9,7 +9,6 @@ import { useAuth } from "../../services/authContext";
 import ProfileCard from "../../components/ProfileCard";
 import ProfileAmbientBackground from "../../components/ProfileAmbientBackground";
 import GlowButton from "../../components/GlowButton";
-import AppFooter from "../../components/AppFooter";
 import { profileHomeBottomPad } from "../../constants/profileLayout";
 import { palette, typography, ui } from "../../constants/theme";
 import type { ProfileStackParamList } from "../../navigation/ProfileStack";
@@ -115,8 +114,6 @@ export default function ProfileHomeScreen() {
             }}
           />
         </ProfileCard>
-
-        <AppFooter />
       </ScrollView>
     </View>
   );

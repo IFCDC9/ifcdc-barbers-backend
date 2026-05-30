@@ -12,14 +12,17 @@ export const PROFILE_AURA_LANE_WIDTH = 108;
 /** Extra gap between last Profile content and the AURA orb. */
 export const PROFILE_AURA_GAP = 40;
 
+/** Global footer rendered by LazyScreen above the tab bar (single copyright line). */
+export const IFCDC_FOOTER_CLEARANCE = 36;
+
 /** Scroll padding for profile sub-screens (tab bar only — AURA is a tab). */
 export function profileScrollBottomPad(safeAreaBottom: number): number {
   return profileTabScrollBottomPad(safeAreaBottom);
 }
 
-/** Scroll padding for tab-root screens (no floating AURA orb). */
+/** Scroll padding for tab-root screens (footer + tab bar). */
 export function profileTabScrollBottomPad(safeAreaBottom: number): number {
-  return safeAreaBottom + PROFILE_TAB_BAR_HEIGHT + 24;
+  return safeAreaBottom + PROFILE_TAB_BAR_HEIGHT + IFCDC_FOOTER_CLEARANCE + 16;
 }
 
 /** Profile home — tab bar only (AURA is a tab, not a floating orb). */

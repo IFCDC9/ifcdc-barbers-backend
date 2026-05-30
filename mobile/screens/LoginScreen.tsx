@@ -6,7 +6,7 @@ import CardContainer from "../components/CardContainer";
 import GlowButton from "../components/GlowButton";
 import GoogleButton from "../components/GoogleButton";
 import IFCDCInput from "../components/IFCDCInput";
-import AppFooter from "../components/AppFooter";
+import IFCDCFooter from "../components/IFCDCFooter";
 import { palette, radius, typography } from "../constants/theme";
 import { BACKEND_URL, apiFullUrl } from "../constants/config";
 import { useAuth } from "../services/authContext";
@@ -230,7 +230,7 @@ export default function LoginScreen({ navigation }: { navigation: any }) {
         />
       </CardContainer>
       </View>
-      <AppFooter />
+      <IFCDCFooter />
     </View>
   );
 }

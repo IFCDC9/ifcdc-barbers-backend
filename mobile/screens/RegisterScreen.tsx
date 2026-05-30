@@ -13,7 +13,7 @@ import Constants from "expo-constants";
 import * as Google from "expo-auth-session/providers/google";
 import { useTranslation } from "react-i18next";
 import CardContainer from "../components/CardContainer";
-import AppFooter from "../components/AppFooter";
+import IFCDCFooter from "../components/IFCDCFooter";
 import GlowButton from "../components/GlowButton";
 import GoogleButton from "../components/GoogleButton";
 import { theme } from "../constants/theme";
@@ -443,7 +443,7 @@ export default function RegisterScreen({ navigation }: { navigation: any }) {
           disabled={busy}
         />
       </CardContainer>
-      <AppFooter />
+      <IFCDCFooter />
     </ScrollView>
   );
 }
