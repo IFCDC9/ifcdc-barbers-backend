@@ -1,0 +1,8 @@
+# Keep EAS upload small — dependencies install on EAS workers.
+node_modules/
+**/.expo/
+**/.metro-cache/
+../backend/
+../client/
+../uploads/
+../tools/
