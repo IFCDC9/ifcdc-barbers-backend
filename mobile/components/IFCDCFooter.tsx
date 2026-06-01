@@ -4,7 +4,7 @@ import { palette, typography } from "../constants/theme";
 
 /** Single source of truth — update footer copy here only. */
 export const IFCDC_FOOTER_COPY = {
-  copyright: "© 2026 IFCDC • All Rights Reserved",
+  copyright: "© 2026 IFCDC",
   powered: "Powered by IFCDC Productions",
 } as const;
 

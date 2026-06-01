@@ -3,13 +3,12 @@ import { StyleSheet, View } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import AuraChatPanel from "../components/AuraChatPanel";
 import DarkGradientBackground from "../components/DarkGradientBackground";
+import { profileTabScrollBottomPad } from "../constants/profileLayout";
 import { theme } from "../constants/theme";
-
-const TAB_CLEARANCE = 64;
 
 export default function AuraScreen() {
   const insets = useSafeAreaInsets();
-  const bottomPad = Math.max(insets.bottom, 8) + TAB_CLEARANCE;
+  const bottomPad = profileTabScrollBottomPad(insets.bottom);
 
   return (
     <SafeAreaView style={styles.root} edges={["top", "left", "right"]}>

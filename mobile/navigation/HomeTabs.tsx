@@ -39,11 +39,14 @@
 
 import React from "react";
 import { Platform, StyleSheet, View } from "react-native";
-import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
+import { createBottomTabNavigator, BottomTabBar } from "@react-navigation/bottom-tabs";
+import type { BottomTabBarProps } from "@react-navigation/bottom-tabs";
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAuth } from "../services/authContext";
 import { LazyScreen } from "../components/LazyScreen";
+import IFCDCFooter from "../components/IFCDCFooter";
+import { IFCDC_FOOTER_HEIGHT } from "../constants/profileLayout";
 import { palette, shadow, tabBar, typography } from "../constants/theme";
 
 const Tab = createBottomTabNavigator();
@@ -91,13 +94,25 @@ function tabIcon(name: keyof typeof Ionicons.glyphMap) {
   );
 }
 
+function TabBarWithFooter(props: BottomTabBarProps) {
+  return (
+    <View style={tabBarShellStyles.wrap}>
+      <View style={tabBarShellStyles.footerStrip}>
+        <IFCDCFooter compact showPowered={false} />
+      </View>
+      <BottomTabBar {...props} />
+    </View>
+  );
+}
+
 function logTabFocus(name: string) {
   console.log(`[nav] tab: ${name}`);
 }
 
 export default function HomeTabs() {
   const insets = useSafeAreaInsets();
-  const tabBarHeight = 60 + Math.max(insets.bottom, 8);
+  const tabIconsHeight = 60;
+  const tabBarHeight = tabIconsHeight + IFCDC_FOOTER_HEIGHT + Math.max(insets.bottom, 8);
 
   // useAuth is wrapped in try/catch so even a transient AuthProvider hiccup
   // (token refresh during a re-render, etc.) cannot crash the tab navigator.
@@ -114,6 +129,7 @@ export default function HomeTabs() {
 
   return (
     <Tab.Navigator
+      tabBar={(props) => <TabBarWithFooter {...props} />}
       screenOptions={{
         headerShown: false,
         tabBarStyle: {
@@ -173,6 +189,19 @@ export default function HomeTabs() {
     </Tab.Navigator>
   );
 }
+
+const tabBarShellStyles = StyleSheet.create({
+  wrap: {
+    backgroundColor: tabBar.background,
+    borderTopWidth: 1,
+    borderTopColor: tabBar.borderTopColor,
+    ...shadow.deep,
+  },
+  footerStrip: {
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: "rgba(212,175,55,0.12)",
+  },
+});
 
 const tabIconStyles = StyleSheet.create({
   wrap: { width: 48, height: 34, alignItems: "center", justifyContent: "center" },

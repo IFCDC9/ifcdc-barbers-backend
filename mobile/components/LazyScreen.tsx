@@ -58,7 +58,6 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import IFCDCFooter from "./IFCDCFooter";
 
 export type LazyLoader = () => unknown;
 
@@ -76,8 +75,6 @@ export type LazyScreenProps<P extends object = Record<string, never>> = {
   background?: string;
   /** Optional callback fired on successful mount of the underlying screen. */
   onMounted?: () => void;
-  /** Hide the global IFCDC footer on this tab (rare). */
-  hideFooter?: boolean;
 };
 
 type Phase =
@@ -117,7 +114,7 @@ class ScreenErrorBoundary extends React.Component<
 export function LazyScreen<P extends object = Record<string, never>>(
   props: LazyScreenProps<P>,
 ) {
-  const { feature, loader, componentProps, background, onMounted, hideFooter = false } = props;
+  const { feature, loader, componentProps, background, onMounted } = props;
   const [phase, setPhase] = React.useState<Phase>({ kind: "loading" });
   const [attempt, setAttempt] = React.useState(0);
 
@@ -210,11 +207,6 @@ export function LazyScreen<P extends object = Record<string, never>>(
           <View style={styles.flex}>
             <Component {...((componentProps ?? {}) as object)} />
           </View>
-          {hideFooter ? null : (
-            <View style={styles.footerSlot}>
-              <IFCDCFooter compact showPowered={false} />
-            </View>
-          )}
         </View>
       </ScreenErrorBoundary>
     </SafeAreaView>
@@ -295,13 +287,6 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: "#0b0b0b" },
   shell: { flex: 1 },
   flex: { flex: 1, minHeight: 0 },
-  /** Keeps copyright line above the tab bar without overlapping it. */
-  footerSlot: {
-    paddingTop: 2,
-    paddingBottom: 8,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: "rgba(212,175,55,0.12)",
-  },
   center: { flex: 1, alignItems: "center", justifyContent: "center", padding: 24 },
   loadingLabel: { color: "#bdbdbd", fontSize: 12, letterSpacing: 0.4, fontWeight: "600" },
   errScroll: { padding: 24, paddingTop: 32, paddingBottom: 64 },
