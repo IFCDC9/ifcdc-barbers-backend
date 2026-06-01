@@ -53,7 +53,7 @@ export async function setBookingStatus(
       booking: json.booking,
     };
   } catch (e) {
-    throw new Error(userFacingApiError(e, "Status could not be updated right now."));
+    throw new Error(userFacingApiError(e));
   }
 }
 
@@ -69,7 +69,7 @@ export async function fetchStatusHistory(
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     if (msg.includes("[api] 404") || msg.includes("not_found")) return [];
-    throw new Error(userFacingApiError(e, "Timeline could not be loaded."));
+    throw new Error(userFacingApiError(e));
   }
 }
 
@@ -88,7 +88,7 @@ export async function appendStatusNote(
     const json = (await res.json()) as { message?: string };
     return { message: json.message || "Note added." };
   } catch (e) {
-    throw new Error(userFacingApiError(e, "Note could not be added right now."));
+    throw new Error(userFacingApiError(e));
   }
 }
 

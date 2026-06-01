@@ -114,7 +114,7 @@ export function payoutRowAmountNumber(b: PayoutBooking, category: PayoutCategory
     case "outstanding_balance":
       return Number(b.remaining_balance ?? 0);
     case "pending_in_person":
-      return Number(b.total_price ?? b.total_amount ?? b.amount ?? 0);
+      return Number(b.total_price ?? b.total_amount ?? (b as { amount?: unknown }).amount ?? 0);
     case "total_collected":
       return Number(b.amount_paid ?? b.total_paid ?? b.total_amount ?? 0);
     default:
@@ -144,7 +144,7 @@ export async function markInPersonPaymentReceived(bookingId: string): Promise<st
       const json = (await res.json()) as { message?: string };
       return json.message || "Payment recorded";
     } catch {
-      throw new Error(userFacingApiError(e, "Payment could not be recorded."));
+      throw new Error(userFacingApiError(e));
     }
   }
 }

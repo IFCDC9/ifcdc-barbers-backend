@@ -17,10 +17,8 @@ import { loginWithEmailPassword } from "../auth/authSessionApi";
 import { userFacingApiError } from "../utils/userFacingApiError";
 import { UX } from "../utils/uxCopy";
 
-const GOOGLE_REDIRECT_OPTIONS = {
-  useProxy: true,
-  projectNameForProxy: "@ifcdc696/ifcdc-barbers-backend",
-} as const;
+// expo-auth-session v7+ redirect options are inferred by the provider.
+const GOOGLE_REDIRECT_OPTIONS = undefined;
 
 export default function LoginScreen({ navigation }: { navigation: any }) {
   const { t } = useTranslation();
@@ -39,10 +37,7 @@ export default function LoginScreen({ navigation }: { navigation: any }) {
     googleAuthConfig.webClientId?.endsWith(".apps.googleusercontent.com")
   );
 
-  const [request, response, promptAsync] = Google.useIdTokenAuthRequest(
-    googleAuthConfig,
-    GOOGLE_REDIRECT_OPTIONS
-  );
+  const [request, response, promptAsync] = Google.useIdTokenAuthRequest(googleAuthConfig);
 
   React.useEffect(() => {
     try {

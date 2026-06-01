@@ -107,7 +107,7 @@ export default function NotificationsScreen() {
         platform: Platform.OS,
         isDevice: false,
         permissionStatus: "unknown",
-        error: userFacingApiError(e, "Unable to read notification status."),
+        error: userFacingApiError(e),
       });
     }
   }, []);
@@ -165,7 +165,7 @@ export default function NotificationsScreen() {
     } catch (e) {
       Alert.alert(
         "Test notification",
-        userFacingApiError(e, "Test notification could not be sent right now."),
+        userFacingApiError(e),
       );
     } finally {
       setTesting(false);

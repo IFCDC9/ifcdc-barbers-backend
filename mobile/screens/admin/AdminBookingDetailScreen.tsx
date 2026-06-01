@@ -310,14 +310,16 @@ export default function AdminBookingDetailScreen() {
           label="Settlement"
           value={paymentStatusHeadline(
             booking.payment_status,
-            (booking as { balance_due?: number }).balance_due ?? booking.remaining_balance,
-            booking.amount_charged ?? booking.amount_paid ?? booking.total_paid,
+            Number((booking as { balance_due?: number | string | null }).balance_due ?? booking.remaining_balance),
+            Number(booking.amount_charged ?? booking.amount_paid ?? booking.total_paid),
           )}
         />
         <MetaRow
           label="Service price"
           value={formatMoney(
-            (booking as { service_price?: number }).service_price ?? booking.total_price ?? booking.amount,
+            (booking as { service_price?: number | string | null }).service_price ??
+              booking.total_price ??
+              (booking as { amount?: number | string | null }).amount,
           )}
         />
         <MetaRow label="Platform fee" value={formatMoney(booking.platform_fee)} />

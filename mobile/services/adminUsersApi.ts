@@ -115,8 +115,8 @@ function normalizeUser(raw: Record<string, unknown>): AdminUserRow | null {
         : raw.profile_image_url != null
           ? String(raw.profile_image_url)
           : null,
-    businessId: raw.businessId ?? raw.business_id ?? null,
-    businessName: raw.businessName ?? raw.business_name ?? null,
+    businessId: (raw.businessId ?? raw.business_id) != null ? (raw.businessId ?? raw.business_id) as string | number : null,
+    businessName: raw.businessName != null ? String(raw.businessName) : raw.business_name != null ? String(raw.business_name) : null,
     createdAt:
       raw.createdAt != null
         ? String(raw.createdAt)

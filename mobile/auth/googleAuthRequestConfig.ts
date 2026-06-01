@@ -49,6 +49,6 @@ export function getGoogleIdTokenAuthConfig() {
     webClientId,
     iosClientId,
     androidClientId,
-    scopes: ["openid", "profile", "email"] as const,
+    scopes: ["openid", "profile", "email"] as string[],
   };
 }

@@ -58,7 +58,7 @@ const styles = StyleSheet.create({
     ...typography.caption,
     fontSize: 11,
     letterSpacing: 0.3,
-    color: palette.muted,
+    color: palette.textMuted,
     textAlign: "center",
     lineHeight: 15,
   },

@@ -64,7 +64,7 @@ export async function fetchBookingById(bookingId: string): Promise<BookingDetail
     if (json && json.booking) return json.booking;
   } catch (e) {
     if (!shouldUseListFallback(e)) {
-      throw new Error(userFacingApiError(e, "Booking could not be loaded."));
+      throw new Error(userFacingApiError(e));
     }
   }
 
@@ -98,6 +98,6 @@ export async function cancelBookingById(
       refundReviewRequired: json.refundReviewRequired,
     };
   } catch (e) {
-    throw new Error(userFacingApiError(e, "Cancel could not be completed."));
+    throw new Error(userFacingApiError(e));
   }
 }

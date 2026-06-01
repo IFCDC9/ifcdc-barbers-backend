@@ -79,7 +79,7 @@ function ShopDetailInner() {
   );
 
   const displayName = shop?.name || shopName;
-  const routeNames = navigation.getState().routeNames as string[];
+  const routeNames = (navigation.getState() as any)?.routeNames as string[] | undefined;
 
   const formatStatus = (status?: string | null) => {
     const raw = String(status || "active").trim().toLowerCase();
@@ -88,8 +88,8 @@ function ShopDetailInner() {
   };
 
   const go = (screen: keyof NavParams, params?: object) => {
-    if (routeNames.includes(screen)) {
-      navigation.navigate(screen as never, params as never);
+    if (routeNames?.includes(String(screen))) {
+      navigation.navigate(screen as any, params as any);
     } else {
       Alert.alert("Admin tools", "Open the Admin tab to access this management area.");
     }

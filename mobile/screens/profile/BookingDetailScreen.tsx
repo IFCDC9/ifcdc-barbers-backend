@@ -27,7 +27,10 @@ import {
 import {
   canPerformBookingDestructiveOps,
   canShowRefundClientButton,
+  bookingRemovalBlockedMessage,
+  canUserRemoveBookingFromHistory,
 } from "../../utils/bookingOpsAccess";
+import { confirmDelete } from "../../utils/confirmDelete";
 import {
   BOOKING_STATUSES,
   canRoleTransition,
@@ -239,7 +242,7 @@ export default function BookingDetailScreen() {
       setBooking(detail);
       setHistory(timeline);
     } catch (e) {
-      Alert.alert("Booking", userFacingApiError(e, "Booking could not be loaded."));
+      Alert.alert("Booking", userFacingApiError(e));
       setBooking(null);
       setHistory([]);
     } finally {
@@ -352,7 +355,7 @@ export default function BookingDetailScreen() {
           Alert.alert("Updated", result.message);
           void load();
         } catch (e) {
-          Alert.alert("Update failed", userFacingApiError(e, "Status could not be updated."));
+          Alert.alert("Update failed", userFacingApiError(e));
         } finally {
           setBusy(false);
         }
@@ -402,7 +405,7 @@ export default function BookingDetailScreen() {
       const message = await resendBookingConfirmation(bookingId);
       Alert.alert("Confirmation", message);
     } catch (e) {
-      Alert.alert("Confirmation", userFacingApiError(e, "Confirmation could not be sent."));
+      Alert.alert("Confirmation", userFacingApiError(e));
     } finally {
       setBusy(false);
     }
@@ -485,10 +488,7 @@ export default function BookingDetailScreen() {
               Alert.alert("Refund processed", result.message);
               void load();
             } catch (e) {
-              Alert.alert(
-                "Refund failed",
-                userFacingApiError(e, "Refund could not be completed."),
-              );
+              Alert.alert("Refund failed", userFacingApiError(e));
             } finally {
               setBusy(false);
             }
@@ -673,10 +673,12 @@ export default function BookingDetailScreen() {
           label={t("booking.details.paymentStatus")}
           value={paymentStatusHeadline(
             booking.payment_status,
-            (booking as { balance_due?: number }).balance_due ?? booking.remaining_balance,
-            (booking as { amount_charged?: number }).amount_charged ??
-              booking.amount_paid ??
-              booking.total_paid,
+            Number((booking as { balance_due?: number | string | null }).balance_due ?? booking.remaining_balance),
+            Number(
+              (booking as { amount_charged?: number | string | null }).amount_charged ??
+                booking.amount_paid ??
+                booking.total_paid,
+            ),
           )}
         />
         <MetaRow label={t("booking.details.servicePrice")} value={servicePriceFor(booking)} />

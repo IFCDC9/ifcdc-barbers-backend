@@ -42,7 +42,7 @@ export async function fetchAdminBookingById(bookingId: string): Promise<AdminBoo
     if (json.booking) return normalizeBooking(json.booking);
   } catch (e) {
     if (!shouldUseListFallback(e)) {
-      throw new Error(userFacingApiError(e, "Booking could not be loaded."));
+      throw new Error(userFacingApiError(e));
     }
   }
 
@@ -68,7 +68,7 @@ export async function patchAdminBookingAction(
       booking: json.booking ? normalizeBooking(json.booking) : undefined,
     };
   } catch (e) {
-    if (!shouldUseListFallback(e)) throw new Error(userFacingApiError(e, "Action could not be completed."));
+    if (!shouldUseListFallback(e)) throw new Error(userFacingApiError(e));
   }
 
   const labels: Record<typeof action, string> = {
@@ -135,7 +135,7 @@ export async function resendBookingConfirmation(bookingId: string): Promise<stri
     const json = (await res.json()) as { message?: string };
     return json.message || "Confirmation sent";
   } catch (e) {
-    if (!shouldUseListFallback(e)) throw new Error(userFacingApiError(e, "Confirmation could not be sent."));
+    if (!shouldUseListFallback(e)) throw new Error(userFacingApiError(e));
   }
   return "Confirmation queued for delivery";
 }

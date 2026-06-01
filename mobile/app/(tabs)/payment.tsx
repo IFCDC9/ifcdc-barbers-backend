@@ -155,7 +155,13 @@ const PaymentScreen = ({
                 throw new Error("verification_parse_failed");
               }
               if (!verifyRes.ok || !verifyJson?.ok) {
-                throw new Error(verifyJson?.error || verifyJson?.status || "verification_failed");
+                const msg =
+                  typeof verifyJson?.error === "string"
+                    ? verifyJson.error
+                    : typeof verifyJson?.status === "string"
+                      ? verifyJson.status
+                      : "verification_failed";
+                throw new Error(msg);
               }
               Alert.alert("✅ Payment Verified", `Booking #${msg.bookingId} is paid.`);
               onSuccess?.(msg.bookingId, msg.orderId);

@@ -48,6 +48,7 @@ function InviteUserInner() {
   const [phone, setPhone] = useState("");
   const [role, setRole] = useState<ManageableRoleKey>("barber");
   const [businessId, setBusinessId] = useState<string | number | null>(null);
+  const [sendSms, setSendSms] = useState(false);
   const [welcomeNote, setWelcomeNote] = useState("");
   const [sendInvite, setSendInvite] = useState(true);
 

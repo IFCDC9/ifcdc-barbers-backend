@@ -25,7 +25,8 @@ export default function PaymentMethodsScreen() {
 
   const openProvider = (providerId: PaymentProviderId) => {
     const route = detailRouteFor(providerId);
-    navigation.navigate(route);
+    // Route names come from PAYMENT_DETAIL_ROUTE and are part of ProfileStackParamList.
+    navigation.navigate(route as any);
   };
 
   return (

@@ -47,7 +47,7 @@ export async function fetchRescheduleSlots(
       reasonIfEmpty: json.reasonIfEmpty ?? null,
     };
   } catch (e) {
-    throw new Error(userFacingApiError(e, "Available times couldn't be loaded right now."));
+    throw new Error(userFacingApiError(e));
   }
 }
 
@@ -81,7 +81,7 @@ export async function rescheduleBooking(
       booking: json.booking,
     };
   } catch (e) {
-    throw new Error(userFacingApiError(e, "Reschedule could not be completed right now."));
+    throw new Error(userFacingApiError(e));
   }
 }
 

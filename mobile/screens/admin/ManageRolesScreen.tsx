@@ -241,7 +241,7 @@ function ManageRolesInner() {
         setToast(`Access removed for ${target.name}`);
       }
     } catch (e) {
-      showError(userFacingApiError(e, "Update failed. Try again."));
+      showError(userFacingApiError(e));
     } finally {
       setBusyUserId(null);
     }
