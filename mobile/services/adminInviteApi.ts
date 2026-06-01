@@ -222,6 +222,27 @@ export async function cancelInvite(inviteId: string): Promise<void> {
   await removeStoredInvite(inviteId);
 }
 
+export async function deleteInvite(inviteId: string): Promise<void> {
+  try {
+    const res = await apiFetch("/api/admin/delete-invite", {
+      method: "DELETE",
+      body: JSON.stringify({ inviteId }),
+    });
+    if (res.ok) {
+      await removeStoredInvite(inviteId);
+      return;
+    }
+    const json = (await res.json()) as { message?: string };
+    throw new Error(json.message || "Delete failed");
+  } catch (e) {
+    if (!shouldUseLocalFallback(e)) {
+      throw new Error(apiErrorMessage(e));
+    }
+  }
+  // Offline fallback: remove local copy only.
+  await removeStoredInvite(inviteId);
+}
+
 export function formatInviteStatus(status: PendingInviteRow["status"]): string {
   if (status === "sent") return "Sent";
   if (status === "revoked") return "Revoked";

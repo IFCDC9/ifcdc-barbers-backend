@@ -20,6 +20,7 @@ import PendingInviteCard from "../../components/PendingInviteCard";
 import GlowButton from "../../components/GlowButton";
 import {
   cancelInvite,
+  deleteInvite,
   collectInviteBlocklistEmails,
   fetchPendingInvites,
   resendInvite,
@@ -60,6 +61,7 @@ function InviteUserInner() {
   const [showSuccess, setShowSuccess] = useState(false);
   const [successNote, setSuccessNote] = useState<string | null>(null);
   const [revokeTarget, setRevokeTarget] = useState<PendingInviteRow | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<PendingInviteRow | null>(null);
 
   const badgeScale = useRef(new Animated.Value(0)).current;
   const badgeGlow = useRef(new Animated.Value(0)).current;
@@ -183,6 +185,21 @@ function InviteUserInner() {
       setInvites((prev) => prev.filter((i) => i.id !== id));
     } catch (e) {
       Alert.alert("Revoke failed", userFacingApiError(e));
+    } finally {
+      setBusyInviteId(null);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!deleteTarget) return;
+    const id = deleteTarget.id;
+    setDeleteTarget(null);
+    setBusyInviteId(id);
+    try {
+      await deleteInvite(id);
+      setInvites((prev) => prev.filter((i) => i.id !== id));
+    } catch (e) {
+      Alert.alert("Delete failed", userFacingApiError(e));
     } finally {
       setBusyInviteId(null);
     }
@@ -354,6 +371,7 @@ function InviteUserInner() {
                 busy={busyInviteId === invite.id}
                 onResend={() => void handleResend(invite)}
                 onRevoke={() => setRevokeTarget(invite)}
+                onDelete={() => setDeleteTarget(invite)}
               />
             ))}
           </View>
@@ -382,6 +400,31 @@ function InviteUserInner() {
                 style={({ pressed }) => [styles.confirmBtn, styles.confirmDanger, pressed && styles.confirmPressed]}
               >
                 <Text style={styles.confirmDangerText}>Revoke</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={deleteTarget != null} transparent animationType="fade" onRequestClose={() => setDeleteTarget(null)}>
+        <View style={styles.confirmBackdrop}>
+          <View style={styles.confirmCard}>
+            <Text style={styles.confirmTitle}>Delete invitation</Text>
+            <Text style={styles.confirmMessage}>
+              Permanently delete the invite for {deleteTarget?.email}? This cannot be undone.
+            </Text>
+            <View style={styles.confirmActions}>
+              <Pressable
+                onPress={() => setDeleteTarget(null)}
+                style={({ pressed }) => [styles.confirmBtn, styles.confirmCancel, pressed && styles.confirmPressed]}
+              >
+                <Text style={styles.confirmCancelText}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => void handleDelete()}
+                style={({ pressed }) => [styles.confirmBtn, styles.confirmDanger, pressed && styles.confirmPressed]}
+              >
+                <Text style={styles.confirmDangerText}>Delete</Text>
               </Pressable>
             </View>
           </View>

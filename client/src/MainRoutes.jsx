@@ -10,6 +10,7 @@ import About from "./pages/About.jsx";
 import Checkout from "./pages/Checkout.jsx";
 import PaymentPage from "./pages/PaymentPage.jsx";
 import Confirmation from "./pages/Confirmation.jsx";
+import Invite from "./pages/Invite.jsx";
 import { theme } from "./components/ui/theme.js";
 import { ADMIN_KEY_STORAGE } from "./config/adminClient.js";
 import PayPalReturnHandler from "./components/PayPalReturnHandler.jsx";
@@ -114,6 +115,8 @@ export default function MainRoutes() {
           <Login />
         ) : route.name === "dashboard" ? (
           <Dashboard navigate={navigate} />
+        ) : route.name === "invite" ? (
+          <Invite token={route.params?.token || ""} navigate={navigate} />
         ) : route.name === "about" ? (
           <About />
         ) : (

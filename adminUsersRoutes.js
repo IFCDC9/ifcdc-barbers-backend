@@ -4,7 +4,7 @@ import { isJwtGlobalSuperScope } from "./authPlatformJwt.js";
 import { dbQuery } from "./db.js";
 import { ALLOWED_ROLES } from "./authDbMigrations.js";
 import { isSuperAdminEmail } from "./rolePolicy.js";
-import { registerAdminInviteRoutes } from "./adminInviteRoutes.js";
+import { registerAdminInviteRoutes, registerPublicInviteRoutes } from "./adminInviteRoutes.js";
 import { registerAdminAuditRoutes } from "./adminAuditRoutes.js";
 import { registerAdminPasswordResetRoutes } from "./adminPasswordResetRoutes.js";
 
@@ -342,6 +342,7 @@ export function createAdminUsersRouter(options = {}) {
   });
 
   registerAdminInviteRoutes(router, { sendEmail: options.sendEmail });
+  registerPublicInviteRoutes(router);
   registerAdminAuditRoutes(router);
   registerAdminPasswordResetRoutes(router, { sendEmail: options.sendEmail });
 

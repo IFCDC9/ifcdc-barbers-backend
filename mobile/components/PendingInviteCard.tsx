@@ -10,9 +10,10 @@ type Props = {
   busy?: boolean;
   onResend: () => void;
   onRevoke: () => void;
+  onDelete: () => void;
 };
 
-export default function PendingInviteCard({ invite, busy, onResend, onRevoke }: Props) {
+export default function PendingInviteCard({ invite, busy, onResend, onRevoke, onDelete }: Props) {
   const scale = useRef(new Animated.Value(1)).current;
   const sent = invite.status === "sent";
 
@@ -65,6 +66,13 @@ export default function PendingInviteCard({ invite, busy, onResend, onRevoke }: 
           >
             <Text style={styles.chipDangerText}>Revoke</Text>
           </Pressable>
+          <Pressable
+            disabled={busy}
+            onPress={onDelete}
+            style={({ pressed }) => [styles.chip, styles.chipGhost, pressed && styles.chipPressed, busy && styles.chipDisabled]}
+          >
+            <Text style={styles.chipGhostText}>Delete</Text>
+          </Pressable>
         </View>
       </ProfileCard>
     </Animated.View>
@@ -101,8 +109,10 @@ const styles = StyleSheet.create({
   },
   chipPrimary: { borderColor: "rgba(245,200,66,0.35)", backgroundColor: "rgba(245,200,66,0.1)" },
   chipDanger: { borderColor: "rgba(255,107,107,0.35)", backgroundColor: "rgba(255,107,107,0.08)" },
+  chipGhost: { borderColor: "rgba(255,255,255,0.14)", backgroundColor: "rgba(255,255,255,0.04)" },
   chipPressed: { opacity: 0.88, transform: [{ scale: 0.97 }] },
   chipDisabled: { opacity: 0.4 },
   chipPrimaryText: { color: theme.colors.gold, fontSize: 12, fontWeight: "700" },
   chipDangerText: { color: theme.colors.danger, fontSize: 12, fontWeight: "700" },
+  chipGhostText: { color: theme.colors.textMuted, fontSize: 12, fontWeight: "700" },
 });

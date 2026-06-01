@@ -28,6 +28,9 @@ export function parseRouteFromPath(normalized) {
   const [pathname, queryString = ""] = normalized.split("?");
   const query = new URLSearchParams(queryString);
 
+  if (pathname === "/invite") {
+    return { name: "invite", params: { token: query.get("token") || "" } };
+  }
   if (pathname === "/barbers") return { name: "barbers", params: {} };
   if (pathname === "/about") return { name: "about", params: {} };
   if (pathname === "/confirmation") {
@@ -81,9 +84,17 @@ export function getRouteFromHash() {
   return parseRouteFromPath(normalized);
 }
 
+/** Supports direct paths like `/invite?token=...` when the host serves index.html for SPA routes. */
+export function getRouteFromLocation() {
+  const pathname = String(window.location.pathname || "/").trim() || "/";
+  const search = String(window.location.search || "");
+  return parseRouteFromPath(`${pathname}${search}`);
+}
+
 export function safeGetRouteFromHash() {
   try {
-    return getRouteFromHash();
+    if (String(window.location.hash || "").trim()) return getRouteFromHash();
+    return getRouteFromLocation();
   } catch (e) {
     console.error("[ifcdc] route parse failed:", e);
     return { name: "home", params: {} };

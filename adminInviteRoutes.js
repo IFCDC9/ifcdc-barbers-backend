@@ -90,11 +90,20 @@ function validateInviteRole(scope, email, role) {
 }
 
 function inviteAcceptBaseUrl() {
-  const base = String(
-    process.env.PUBLIC_API_URL || process.env.PUBLIC_BASE_URL || process.env.RENDER_EXTERNAL_URL || "",
-  )
-    .trim()
-    .replace(/\/$/, "");
+  const raw = String(
+    process.env.FRONTEND_URL ||
+      process.env.PUBLIC_WEB_URL ||
+      process.env.PUBLIC_CLIENT_URL ||
+      process.env.VITE_APP_URL ||
+      process.env.APP_URL ||
+      process.env.PUBLIC_URL ||
+      "",
+  ).trim();
+  const base = raw.replace(/\/$/, "");
+  // Guardrail: never point invite links at the backend API origin.
+  if (base.includes("onrender.com") || base.includes("/api")) {
+    console.warn("[admin/invite] FRONTEND_URL appears to be misconfigured:", base);
+  }
   return base || "https://ifcdcbarbersapp.com";
 }
 
@@ -115,6 +124,7 @@ function buildInviteEmailHtml({ name, role, inviteUrl, welcomeNote }) {
 async function sendInviteEmailIfReady({ invite, sendEmail, sendEmailFn }) {
   if (!sendEmail || typeof sendEmailFn !== "function") return false;
   const inviteUrl = `${inviteAcceptBaseUrl()}/invite?token=${encodeURIComponent(invite.invite_token)}`;
+  console.log("[admin/invite] Invite URL Generated:", inviteUrl);
   try {
     const result = await sendEmailFn({
       to: invite.email,
@@ -131,6 +141,111 @@ async function sendInviteEmailIfReady({ invite, sendEmail, sendEmailFn }) {
     console.warn("[admin/invite] email failed:", e?.message || e);
     return false;
   }
+}
+
+function parseInviteToken(req) {
+  const fromQuery = typeof req.query?.token === "string" ? req.query.token : "";
+  const fromBody = typeof req.body?.token === "string" ? req.body.token : "";
+  const token = String(fromQuery || fromBody || "").trim();
+  return token;
+}
+
+async function loadActiveInviteByToken(token) {
+  const r = await dbQuery(
+    `SELECT i.*, b.name AS business_name
+     FROM pending_user_invites i
+     LEFT JOIN businesses b ON b.id = i.business_id
+     WHERE i.invite_token = $1
+       AND i.status = ANY($2::text[])
+     LIMIT 1`,
+    [token, ACTIVE_INVITE_STATUSES],
+  );
+  return r.rows?.[0] || null;
+}
+
+export function registerPublicInviteRoutes(router) {
+  // Validate an invite token so the frontend can render a safe acceptance UI.
+  router.get("/api/invite/validate", async (req, res) => {
+    const token = parseInviteToken(req);
+    console.log("[invite] validate token:", token ? `${token.slice(0, 6)}…` : "(missing)");
+    if (!token) return res.status(400).json({ ok: false, error: "token_required" });
+    const row = await loadActiveInviteByToken(token);
+    if (!row) return res.status(404).json({ ok: false, error: "invalid_or_expired" });
+    const invite = rowToInvite(row);
+    // Do not leak internal ids/tokens beyond what’s needed.
+    return res.json({
+      ok: true,
+      invite: {
+        email: invite.email,
+        name: invite.name,
+        role: invite.role,
+        businessName: invite.businessName,
+        status: invite.status,
+      },
+    });
+  });
+
+  // Accept an invite: create the account with invite role + business scope.
+  router.post("/api/invite/accept", async (req, res) => {
+    const token = parseInviteToken(req);
+    console.log("[invite] accept token:", token ? `${token.slice(0, 6)}…` : "(missing)");
+    if (!token) return res.status(400).json({ ok: false, error: "token_required" });
+
+    const password = String(req.body?.password || "").trim();
+    if (!password) return res.status(400).json({ ok: false, error: "password_required" });
+
+    const row = await loadActiveInviteByToken(token);
+    if (!row) return res.status(404).json({ ok: false, error: "invalid_or_expired" });
+
+    // Lazy imports to avoid circular deps at module-load time.
+    const { hashPassword, validatePasswordStrength } = await import("./authPasswordPolicy.js");
+    const { issueAppUserJwt } = await import("./authRoutes.js");
+    const { publicUserFromAppUser } = await import("./authPlatformJwt.js");
+
+    const pw = validatePasswordStrength(password);
+    if (!pw.valid) {
+      return res.status(400).json({ ok: false, error: "weak_password", message: pw.message });
+    }
+
+    const email = normalizeEmail(row.email);
+    const name = String(row.name || "").trim().slice(0, 255) || email.split("@")[0] || "User";
+    const role = normalizeInviteRole(row.role);
+    const phoneRaw = row.phone != null ? String(row.phone).replace(/\D/g, "").slice(0, 15) : null;
+    const businessId = row.business_id != null ? Number(row.business_id) : null;
+
+    // Prevent duplicate acceptance.
+    const existingUser = await dbQuery(
+      `SELECT id FROM app_users WHERE lower(trim(email)) = lower(trim($1)) LIMIT 1`,
+      [email],
+    );
+    if (existingUser.rows?.length) {
+      return res.status(409).json({ ok: false, error: "email_exists", message: "This email is already registered." });
+    }
+
+    const passwordHash = await hashPassword(password);
+    const created = await dbQuery(
+      `INSERT INTO app_users (name, email, phone, password_hash, role, business_id)
+       VALUES ($1, $2, $3, $4, $5, $6::bigint)
+       RETURNING id, name, email, phone, profile_image_url, role, barber_id, business_id, created_at`,
+      [name, email, phoneRaw, passwordHash, role, businessId],
+    );
+    const user = created.rows?.[0];
+    if (!user) return res.status(500).json({ ok: false, error: "create_failed" });
+
+    await dbQuery(
+      `UPDATE pending_user_invites
+       SET status = 'accepted', onboarding_state = 'invite_accepted'
+       WHERE id = $1::uuid`,
+      [row.id],
+    );
+
+    const tokenJwt = issueAppUserJwt(user);
+    return res.json({
+      ok: true,
+      token: tokenJwt,
+      user: publicUserFromAppUser(user),
+    });
+  });
 }
 
 function parseBusinessId(raw) {
@@ -394,6 +509,32 @@ export function registerAdminInviteRoutes(router, { sendEmail } = {}) {
     } catch (e) {
       console.error("[admin/invite] cancel failed:", e?.message || e);
       return res.status(500).json({ ok: false, success: false, message: "Failed to revoke invite" });
+    }
+  });
+
+  // Hard delete (remove old / accidental / expired invites).
+  router.delete("/api/admin/delete-invite", async (req, res) => {
+    const scope = await resolveUserManagementScope(req, res);
+    if (!scope) return;
+
+    try {
+      const inviteId = String(req.body?.inviteId || req.body?.id || req.query?.inviteId || "").trim();
+      if (!inviteId) return res.status(400).json({ ok: false, success: false, message: "inviteId is required." });
+
+      const row = await loadInviteById(inviteId);
+      if (!row) return res.status(404).json({ ok: false, success: false, message: "Invite not found." });
+      if (!scope.all) {
+        const biz = row.business_id != null ? Number(row.business_id) : NaN;
+        if (!Number.isFinite(biz) || biz !== scope.businessId) {
+          return res.status(403).json({ ok: false, success: false, message: "You cannot delete this invite." });
+        }
+      }
+
+      await dbQuery(`DELETE FROM pending_user_invites WHERE id = $1::uuid`, [inviteId]);
+      return res.json({ ok: true, success: true, inviteId });
+    } catch (e) {
+      console.error("[admin/invite] delete failed:", e?.message || e);
+      return res.status(500).json({ ok: false, success: false, message: "Failed to delete invite" });
     }
   });
 }
