@@ -19,6 +19,23 @@
 # (If unset, the app uses RENDER_EXTERNAL_URL from Render automatically.)
 
 services:
+  # Frontend (Render Static Site) — SPA rewrite required for deep links like /invite
+  - type: static_site
+    name: ifcdc-barbers-frontend
+    region: oregon
+    plan: starter
+    rootDir: client
+    buildCommand: npm install && npm run build
+    staticPublishPath: dist
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      # Point the frontend at the production API (set/override in dashboard if needed).
+      - key: VITE_API_BASE
+        value: https://ifcdc-barbers-backend696.onrender.com
+
   - type: web
     name: ifcdc-barbers-backend
     runtime: node
