@@ -1,9 +1,21 @@
 import React from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { apiUrl, fetchWithTimeout } from "../lib/api.js";
 import { theme } from "../components/ui/theme.js";
 import { LOGGED_IN_KEY, USER_PUBLIC_KEY } from "../lib/authSession.js";
 
-export default function Invite({ token, navigate }) {
+function redirectPathForRole(role) {
+  const r = String(role || "").trim().toLowerCase();
+  if (r === "super_admin" || r === "admin") return "/admin";
+  if (r === "barber" || r === "shop_owner") return "/dashboard";
+  return "/booking";
+}
+
+export default function Invite({ token: tokenProp, navigate: navigateProp }) {
+  const [searchParams] = useSearchParams();
+  const routerNavigate = useNavigate();
+  const token = String(tokenProp || searchParams.get("token") || "").trim();
+  const navigate = navigateProp || ((to) => routerNavigate(to));
   const [loading, setLoading] = React.useState(true);
   const [invite, setInvite] = React.useState(null);
   const [error, setError] = React.useState("");
@@ -12,7 +24,7 @@ export default function Invite({ token, navigate }) {
   const [done, setDone] = React.useState(false);
 
   React.useEffect(() => {
-    const t = String(token || "").trim();
+    const t = token;
     console.log("[invite] token:", t ? `${t.slice(0, 6)}…` : "(missing)");
     if (!t) {
       setError("Missing invite token.");
@@ -42,7 +54,7 @@ export default function Invite({ token, navigate }) {
   }, [token]);
 
   const accept = async () => {
-    const t = String(token || "").trim();
+    const t = token;
     if (!t) return;
     if (!password.trim()) {
       setError("Please set a password to accept the invitation.");
@@ -61,13 +73,16 @@ export default function Invite({ token, navigate }) {
         throw new Error(j?.message || j?.error || "Invite could not be accepted.");
       }
       try {
+        if (j.token) window.localStorage.setItem("token", String(j.token));
+        window.localStorage.setItem("user", JSON.stringify(j.user || {}));
         window.localStorage.setItem(LOGGED_IN_KEY, "1");
         window.localStorage.setItem(USER_PUBLIC_KEY, JSON.stringify(j.user || {}));
       } catch {
         // ignore storage issues
       }
       setDone(true);
-      setTimeout(() => navigate?.("/dashboard"), 450);
+      const dest = redirectPathForRole(j.user?.role);
+      setTimeout(() => navigate(dest), 450);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {

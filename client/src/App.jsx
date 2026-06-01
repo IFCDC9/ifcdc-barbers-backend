@@ -16,6 +16,7 @@ import Admin from "./pages/Admin.jsx";
 import Dashboard from "./pages/Dashboard.jsx";
 import BarberSettings from "./pages/BarberSettings.jsx";
 import RequireRole from "./components/RequireRole.jsx";
+import Invite from "./pages/Invite.jsx";
 
 function AppShell() {
   return (
@@ -47,6 +48,7 @@ function AppShell() {
             <Route path="/phone" element={<Phone />} />
             <Route path="/about" element={<About />} />
             <Route path="/login" element={<Login />} />
+            <Route path="/invite" element={<Invite />} />
             <Route path="/register" element={<Register />} />
             <Route path="/forgot-password" element={<ForgotPassword />} />
             <Route path="/reset-password" element={<ResetPassword />} />
