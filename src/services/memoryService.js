@@ -100,24 +100,51 @@ export async function saveCustomer(phone, data) {
       return null
     }
 
-    const { name = null, preferred_barber = null, language = null } = data || {}
+    const { name = null, preferred_barber = null, language = null, email = null } = data || {}
 
-    const result = await db.query(
-      `
-      INSERT INTO customers (phone, name, preferred_barber, language)
-      VALUES ($1, $2, $3, $4)
-      ON CONFLICT (phone)
-      DO UPDATE SET
-        name = COALESCE(EXCLUDED.name, customers.name),
-        preferred_barber = COALESCE(EXCLUDED.preferred_barber, customers.preferred_barber),
-        language = COALESCE(EXCLUDED.language, customers.language),
-        last_visit = NOW()
-      RETURNING *
-      `,
-      [normalizedPhone, name, preferred_barber, language]
-    )
+    const attempts = [
+      {
+        query: `
+          INSERT INTO customers (phone, name, preferred_barber, language, email)
+          VALUES ($1, $2, $3, $4, $5)
+          ON CONFLICT (phone)
+          DO UPDATE SET
+            name = COALESCE(EXCLUDED.name, customers.name),
+            preferred_barber = COALESCE(EXCLUDED.preferred_barber, customers.preferred_barber),
+            language = COALESCE(EXCLUDED.language, customers.language),
+            email = COALESCE(EXCLUDED.email, customers.email),
+            last_visit = NOW()
+          RETURNING *
+        `,
+        values: [normalizedPhone, name, preferred_barber, language, email],
+      },
+      {
+        query: `
+          INSERT INTO customers (phone, name, preferred_barber, language)
+          VALUES ($1, $2, $3, $4)
+          ON CONFLICT (phone)
+          DO UPDATE SET
+            name = COALESCE(EXCLUDED.name, customers.name),
+            preferred_barber = COALESCE(EXCLUDED.preferred_barber, customers.preferred_barber),
+            language = COALESCE(EXCLUDED.language, customers.language),
+            last_visit = NOW()
+          RETURNING *
+        `,
+        values: [normalizedPhone, name, preferred_barber, language],
+      },
+    ]
 
-    return result.rows[0] || null
+    let lastError = null
+    for (const attempt of attempts) {
+      try {
+        const result = await db.query(attempt.query, attempt.values)
+        return result.rows[0] || null
+      } catch (error) {
+        lastError = error
+      }
+    }
+
+    throw lastError
   } catch (error) {
     console.error("❌ saveCustomer error:", error.message)
     throw error
