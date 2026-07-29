@@ -304,6 +304,7 @@ async function sendBookingEmail({
   platformFee,
   language,
   bookingRow,
+  alsoSendPaymentConfirmation = false,
 } = {}) {
   const resend = getResend();
   if (!resend) {
@@ -356,6 +357,42 @@ async function sendBookingEmail({
     throw new Error(customerResult.error.message || "Booking email send failed");
   }
 
+  let paymentMessageId = null;
+  if (alsoSendPaymentConfirmation && shouldSendPaidConfirmationEmail(resolvedStatus)) {
+    const amt = round2(amountCharged ?? amountPaid ?? totalPaid ?? 0);
+    const paySubject = "IFCDC Barbers payment confirmation";
+    const payText =
+      `Hello ${name || "Customer"},\n\n` +
+      `Your payment was received successfully.\n` +
+      `Amount: $${Number(amt).toFixed(2)}\n` +
+      `Booking reference: ${paymentId || captureId || "N/A"}\n\n` +
+      `Thank you for choosing IFCDC Barbers.`;
+    const payHtml =
+      `<p>Hello ${escapeHtml(name || "Customer")},</p>` +
+      `<p>Your <strong>payment was received successfully</strong>.</p>` +
+      `<ul>` +
+      `<li>Amount: $${escapeHtml(Number(amt).toFixed(2))}</li>` +
+      `<li>Booking reference: ${escapeHtml(String(paymentId || captureId || "N/A"))}</li>` +
+      `</ul>` +
+      `<p>Thank you for choosing IFCDC Barbers.</p>`;
+    const paymentResult = await sendEmail({
+      to: toAddr,
+      subject: paySubject,
+      html: payHtml,
+      text: payText,
+      label: "payment-confirmation",
+    });
+    if (paymentResult.error) {
+      console.error(
+        "[email] payment confirmation failed:",
+        paymentResult.error.message || paymentResult.error
+      );
+    } else {
+      paymentMessageId = paymentResult.data?.id || null;
+      console.log("[email] payment confirmation sent messageId=", paymentMessageId || "none");
+    }
+  }
+
   const adminEmail = String(process.env.BOOKING_ADMIN_EMAIL || "service@ifcdc.org").trim();
   let adminResult = null;
   if (adminEmail) {
@@ -385,6 +422,7 @@ async function sendBookingEmail({
     customer: customerResult,
     admin: adminResult,
     messageId: customerResult.data?.id,
+    paymentMessageId,
   };
 }
 

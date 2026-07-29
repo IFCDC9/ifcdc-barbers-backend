@@ -967,7 +967,7 @@ router.post("/finalize", async (req, res) => {
       try {
         const { sendBookingEmail } = require("./bookingEmail.cjs");
         const view = bookingPaymentViewFromRow(fresh);
-        await sendBookingEmail({
+        const mail = await sendBookingEmail({
           name: row.customer_name || "Guest",
           email: row.customer_email,
           service: row.service || "Haircut",
@@ -985,10 +985,29 @@ router.post("/finalize", async (req, res) => {
           amountPaid: view.amountPaid,
           balanceDue: view.balanceDue,
           bookingRow: fresh,
+          alsoSendPaymentConfirmation: true,
         });
-        console.log("[app-bookings] payment confirmation email sent:", row.customer_email, view.paymentStatus);
+        console.log(
+          "[app-bookings] confirmation emails sent:",
+          row.customer_email,
+          view.paymentStatus,
+          "bookingMessageId=",
+          mail?.messageId || mail?.customer?.data?.id || "none",
+          "paymentMessageId=",
+          mail?.paymentMessageId || "none"
+        );
+        // Attach for live verification callers.
+        res.locals.emailResults = {
+          bookingConfirmationMessageId: mail?.messageId || mail?.customer?.data?.id || null,
+          paymentConfirmationMessageId: mail?.paymentMessageId || null,
+          success: Boolean(mail?.success),
+        };
       } catch (mailErr) {
         console.warn("[app-bookings] confirmation email failed:", mailErr?.message || mailErr);
+        res.locals.emailResults = {
+          success: false,
+          error: mailErr?.message || String(mailErr),
+        };
       }
     } else {
       console.warn("[app-bookings] skipped paid confirmation email — status not settled", settlement.paymentStatus);
@@ -1046,6 +1065,7 @@ router.post("/finalize", async (req, res) => {
         haircutPrice: view.servicePrice,
         total: view.totalDue,
       },
+      emailResults: res.locals.emailResults || null,
     });
   } catch (e) {
     if (e?.code === "paypal_config") {
