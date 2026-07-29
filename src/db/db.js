@@ -198,13 +198,37 @@ const rewriteResult = rewriteDirectSupabaseToPooler(
 )
 const resolvedDatabaseUrl = rewriteResult.url
 
+function sanitizeConfiguredSource() {
+  const raw = String(process.env.DATABASE_URL || "").trim()
+  if (!raw) return { configuredHost: null, configuredPort: null, configuredUserPreview: null }
+  try {
+    const src = new URL(raw)
+    const srcUser = safeDecodeURIComponent(src.username || "")
+    return {
+      configuredHost: src.hostname || null,
+      configuredPort: Number(src.port || 0) || null,
+      configuredUserPreview: /^postgres\./i.test(srcUser)
+        ? "postgres.<project-ref>"
+        : srcUser === "postgres"
+          ? "postgres"
+          : srcUser
+            ? `${srcUser.slice(0, 3)}…`
+            : null,
+    }
+  } catch {
+    return { configuredHost: "(unparseable)", configuredPort: null, configuredUserPreview: null }
+  }
+}
+
 /** Sanitized connection target for /api/health (no secrets). */
 export function getDatabaseTargetInfo() {
+  const source = sanitizeConfiguredSource()
   try {
     const u = new URL(String(resolvedDatabaseUrl || "").trim() || "postgresql://invalid")
     const user = safeDecodeURIComponent(u.username || "")
     return {
       configured: Boolean(String(process.env.DATABASE_URL || "").trim()),
+      ...source,
       host: u.hostname || null,
       port: Number(u.port || 0) || null,
       database: (u.pathname || "/").replace(/^\//, "") || null,
@@ -221,6 +245,7 @@ export function getDatabaseTargetInfo() {
   } catch {
     return {
       configured: Boolean(String(process.env.DATABASE_URL || "").trim()),
+      ...source,
       host: null,
       port: null,
       database: null,

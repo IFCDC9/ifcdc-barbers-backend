@@ -4,6 +4,7 @@
  * - Then: `backend/.env` (legacy local layout) without overriding existing values
  * Import this as the first side effect from `server.js` (or `src/server.js` / `src/index.js`).
  *
+ * Production (Render): never load local .env files — platform env is the source of truth.
  * If `TWILIO_MESSAGING_SERVICE_SID` is empty but Account SID + Auth Token are set,
  * resolves the SID from the Twilio Messaging Services API (first service when multiple).
  */
@@ -13,10 +14,16 @@ import { fileURLToPath } from "node:url";
 const repoRoot = path.dirname(fileURLToPath(import.meta.url));
 const rootEnvPath = path.resolve(repoRoot, ".env");
 const backendEnvPath = path.resolve(repoRoot, "backend", ".env");
-dotenv.config({ path: rootEnvPath });
-dotenv.config({ path: backendEnvPath, override: false });
+const isProduction = String(process.env.NODE_ENV || "").toLowerCase() === "production"
+  || Boolean(String(process.env.RENDER || "").trim());
 
-console.log("🔥 ENV PATH:", rootEnvPath, "|", backendEnvPath);
+if (!isProduction) {
+  dotenv.config({ path: rootEnvPath });
+  dotenv.config({ path: backendEnvPath, override: false });
+  console.log("🔥 ENV PATH:", rootEnvPath, "|", backendEnvPath);
+} else {
+  console.log("[env] production/Render — skipping local .env files; using platform environment");
+}
 
 let sid = (process.env.TWILIO_MESSAGING_SERVICE_SID || "").trim();
 

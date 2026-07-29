@@ -637,12 +637,14 @@ app.get("/health", (req, res) => {
 });
 
 app.get("/api/health", async (req, res) => {
-  const db = { ok: false, error: null };
+  const db = { ok: false, error: null, errorDetail: null };
   try {
     await dbQuery("SELECT 1");
     db.ok = true;
   } catch (err) {
     db.error = String(err?.code || err?.message || "db_unreachable");
+    const detail = String(err?.message || "").slice(0, 240);
+    if (detail && detail !== db.error) db.errorDetail = detail;
   }
 
   const resendKeyLoaded = Boolean(getResend());

@@ -408,12 +408,15 @@ app.post("/voice", voiceFormBody, (req, res) => {
 
 /* Optional public probe (no /api middleware stack) */
 app.get("/api/health", async (_req, res) => {
-  let db = { ok: false, error: null }
+  let db = { ok: false, error: null, errorDetail: null }
   try {
     await pool.query("SELECT 1")
     db.ok = true
   } catch (err) {
     db.error = String(err?.code || err?.message || "db_unreachable")
+    // Surface pooler/auth hints without secrets (XX000 often = tenant/user/password).
+    const detail = String(err?.message || "").slice(0, 240)
+    if (detail && detail !== db.error) db.errorDetail = detail
   }
 
   const publicBase =
