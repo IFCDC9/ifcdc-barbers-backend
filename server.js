@@ -27,7 +27,7 @@ import { handleBarberAvailableSlotsGet } from "./barberAvailableSlotsRoute.js";
 import { createBookingsRouter, insertAuraVoiceBookingRow } from "./bookingsRoutes.js";
 import { createBookingsAdminGuard } from "./bookingsAdminGuard.js";
 import { createAdminUsersRouter } from "./adminUsersRoutes.js";
-import { dbQuery } from "./db.js";
+import { dbQuery, getDatabaseTargetInfo } from "./db.js";
 import { ensureSecurityAuditTable, ensureSecurityTenantColumns } from "./securityTenantMigrations.js";
 import {
   auraUnclearFallbackReply,
@@ -661,7 +661,10 @@ app.get("/api/health", async (req, res) => {
       process.env.RENDER_EXTERNAL_URL?.trim() ||
       process.env.PUBLIC_API_URL ||
       null,
-    db,
+    db: {
+      ...db,
+      target: getDatabaseTargetInfo(),
+    },
     resend: {
       apiKeyLoaded: resendKeyLoaded,
       mailFromConfigured: Boolean(mailFrom),

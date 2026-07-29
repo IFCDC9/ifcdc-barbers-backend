@@ -35,8 +35,6 @@ function normalizeDatabaseUrl(raw) {
   }
 }
 
-const resolvedDatabaseUrl = normalizeDatabaseUrl(process.env.DATABASE_URL)
-
 /**
  * pg merges parse(connectionString) over Pool config; sslmode=require becomes ssl: {}
  * and is treated like verify-full, which breaks with some proxies/certs. Strip SSL query
@@ -88,6 +86,151 @@ function shouldUseSsl(connectionString) {
 
 function isSupabasePoolerHost(hostname) {
   return String(hostname || "").toLowerCase().includes("pooler.supabase.com")
+}
+
+/** Direct Supabase DB host: db.<project-ref>.supabase.co (often IPv6-only → ENETUNREACH on Render). */
+function parseDirectSupabaseDbHost(hostname) {
+  const m = String(hostname || "")
+    .toLowerCase()
+    .match(/^db\.([a-z0-9]+)\.supabase\.co$/)
+  return m ? m[1] : null
+}
+
+function projectRefFromSupabaseUrl(envUrl) {
+  const s = String(envUrl || "").trim()
+  if (!s) return null
+  try {
+    const m = new URL(s).hostname.toLowerCase().match(/^([a-z0-9]+)\.supabase\.co$/)
+    return m ? m[1] : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Rewrite IPv6-only db.<ref>.supabase.co URIs to the Supabase connection pooler (IPv4).
+ * Render (and many hosts) cannot open outbound IPv6 to the direct DB hostname.
+ *
+ * Prefer env DATABASE_POOLER_HOST / SUPABASE_POOLER_REGION when set.
+ * Disable with DATABASE_FORCE_DIRECT=1.
+ */
+function rewriteDirectSupabaseToPooler(urlString) {
+  if (String(process.env.DATABASE_FORCE_DIRECT || "").trim() === "1") {
+    return { url: urlString, rewritten: false, reason: "DATABASE_FORCE_DIRECT=1" }
+  }
+
+  let u
+  try {
+    u = new URL(String(urlString || "").trim())
+  } catch {
+    return { url: urlString, rewritten: false, reason: "invalid_url" }
+  }
+
+  const host = u.hostname.toLowerCase()
+  if (isSupabasePoolerHost(host)) {
+    return { url: urlString, rewritten: false, reason: "already_pooler", host }
+  }
+
+  const refFromHost = parseDirectSupabaseDbHost(host)
+  const ref =
+    refFromHost
+    || projectRefFromSupabaseUrl(process.env.SUPABASE_URL)
+    || projectRefFromSupabaseUrl(process.env.VITE_SUPABASE_URL)
+    || String(process.env.SUPABASE_PROJECT_REF || "").trim()
+    || null
+
+  if (!refFromHost && host.includes("supabase")) {
+    // Not a direct db.* host — leave alone.
+    return { url: urlString, rewritten: false, reason: "not_direct_db_host", host }
+  }
+  if (!refFromHost) {
+    return { url: urlString, rewritten: false, reason: "not_supabase_direct", host }
+  }
+
+  const region = String(
+    process.env.SUPABASE_POOLER_REGION
+      || process.env.DATABASE_POOLER_REGION
+      || process.env.SUPABASE_REGION
+      || "us-east-1"
+  )
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, "") || "us-east-1"
+
+  const poolerHost = String(
+    process.env.DATABASE_POOLER_HOST || process.env.SUPABASE_POOLER_HOST || ""
+  )
+    .trim()
+    .toLowerCase() || `aws-0-${region}.pooler.supabase.com`
+
+  const poolerPort = String(process.env.DATABASE_POOLER_PORT || "6543").trim() || "6543"
+
+  const rawUser = safeDecodeURIComponent(u.username || "postgres").trim() || "postgres"
+  const user =
+    rawUser === "postgres" || !rawUser.includes(".")
+      ? `postgres.${ref}`
+      : rawUser
+
+  u.hostname = poolerHost
+  u.port = poolerPort
+  u.username = user
+  // Keep password / database / search params; ensure sslmode=require for docs clarity (stripped later for pg).
+  if (!u.searchParams.get("sslmode")) {
+    u.searchParams.set("sslmode", "require")
+  }
+
+  const next = u.toString()
+  console.log(
+    `[db] Rewrote direct Supabase host db.${ref}.supabase.co → pooler ${poolerHost}:${poolerPort} user=postgres.<ref> (avoids IPv6 ENETUNREACH on Render)`
+  )
+  return {
+    url: next,
+    rewritten: true,
+    reason: "ipv6_direct_to_pooler",
+    projectRef: ref,
+    poolerHost,
+    poolerPort,
+  }
+}
+
+const rewriteResult = rewriteDirectSupabaseToPooler(
+  normalizeDatabaseUrl(process.env.DATABASE_URL)
+)
+const resolvedDatabaseUrl = rewriteResult.url
+
+/** Sanitized connection target for /api/health (no secrets). */
+export function getDatabaseTargetInfo() {
+  try {
+    const u = new URL(String(resolvedDatabaseUrl || "").trim() || "postgresql://invalid")
+    const user = safeDecodeURIComponent(u.username || "")
+    return {
+      configured: Boolean(String(process.env.DATABASE_URL || "").trim()),
+      host: u.hostname || null,
+      port: Number(u.port || 0) || null,
+      database: (u.pathname || "/").replace(/^\//, "") || null,
+      userPreview: /^postgres\./i.test(user)
+        ? "postgres.<project-ref>"
+        : user
+          ? `${user.slice(0, 3)}…`
+          : null,
+      isPooler: isSupabasePoolerHost(u.hostname),
+      isDirectDbHost: Boolean(parseDirectSupabaseDbHost(u.hostname)),
+      rewrittenToPooler: Boolean(rewriteResult.rewritten),
+      rewriteReason: rewriteResult.reason || null,
+    }
+  } catch {
+    return {
+      configured: Boolean(String(process.env.DATABASE_URL || "").trim()),
+      host: null,
+      port: null,
+      database: null,
+      userPreview: null,
+      isPooler: false,
+      isDirectDbHost: false,
+      rewrittenToPooler: Boolean(rewriteResult.rewritten),
+      rewriteReason: rewriteResult.reason || null,
+    }
+  }
 }
 
 function resolveSupabaseIpv4Sync(hostname) {

@@ -60,7 +60,7 @@ const require = createRequire(import.meta.url)
 console.log("[boot] requiring socket.io...")
 const { Server } = require("socket.io")
 console.log("[boot] required socket.io")
-const { default: pool } = await bootImport("db/db", () => import("./db/db.js"))
+const { default: pool, getDatabaseTargetInfo } = await bootImport("db/db", () => import("./db/db.js"))
 
 /* ==========================================
    ROUTES
@@ -430,7 +430,10 @@ app.get("/api/health", async (_req, res) => {
       process.env.SUPABASE_URL?.trim()
       && resolveSupabaseSecretKey()
     ),
-    db,
+    db: {
+      ...db,
+      target: typeof getDatabaseTargetInfo === "function" ? getDatabaseTargetInfo() : null,
+    },
     openai: Boolean(process.env.OPENAI_API_KEY?.trim()),
     twilio: Boolean(
       process.env.TWILIO_ACCOUNT_SID?.trim()
