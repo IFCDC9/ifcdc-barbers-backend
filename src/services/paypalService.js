@@ -88,10 +88,10 @@ export async function capturePayPalOrder(orderId, bookingId) {
   console.log(`[paypal] capture requested orderId=${orderId} bookingId=${bookingId || "none"}`)
 
   // Update booking with payment confirmation
+  let emailResults = null
   if (bookingId && data?.id) {
     const payload = JSON.stringify(data)
     const captureId = data?.purchase_units?.[0]?.payments?.captures?.[0]?.id
-    let emailResults = null
     const amount =
       data?.purchase_units?.[0]?.payments?.captures?.[0]?.amount?.value ||
       data?.purchase_units?.[0]?.amount?.value ||
