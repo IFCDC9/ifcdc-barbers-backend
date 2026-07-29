@@ -636,8 +636,38 @@ app.get("/health", (req, res) => {
   res.json({ ok: true, service: "ifcdc-barbers-api" });
 });
 
-app.get("/api/health", (req, res) => {
-  const payload = { status: "OK" };
+app.get("/api/health", async (req, res) => {
+  const db = { ok: false, error: null };
+  try {
+    await dbQuery("SELECT 1");
+    db.ok = true;
+  } catch (err) {
+    db.error = String(err?.code || err?.message || "db_unreachable");
+  }
+
+  const resendKeyLoaded = Boolean(getResend());
+  const mailFrom = getMailFrom();
+  const payload = {
+    status: db.ok ? "OK" : "DEGRADED",
+    ok: true,
+    uptime: process.uptime(),
+    commit:
+      process.env.RENDER_GIT_COMMIT ||
+      process.env.GIT_COMMIT ||
+      process.env.COMMIT_SHA ||
+      null,
+    publicBaseUrl:
+      process.env.PUBLIC_BASE_URL?.trim() ||
+      process.env.RENDER_EXTERNAL_URL?.trim() ||
+      process.env.PUBLIC_API_URL ||
+      null,
+    db,
+    resend: {
+      apiKeyLoaded: resendKeyLoaded,
+      mailFromConfigured: Boolean(mailFrom),
+      mailFrom: mailFrom || null,
+    },
+  };
   if (String(req.query.aura || "").trim() === "1") {
     payload.aura = auraStatusPayload();
   }

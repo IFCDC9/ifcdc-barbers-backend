@@ -60,10 +60,22 @@ function getResend() {
   return _client;
 }
 
-/** Canonical From — MAIL_FROM only (no resend.dev fallbacks). */
+/**
+ * Canonical From — prefer MAIL_FROM; fall back to verified barbers domain so
+ * production can send when only RESEND_API_KEY was restored.
+ */
 function getMailFrom() {
   const raw = sanitizeEnvLine(process.env.MAIL_FROM);
-  return raw || null;
+  if (raw) return raw;
+  const alt = sanitizeEnvLine(
+    process.env.RESEND_FROM_EMAIL ||
+      process.env.EMAIL_FROM ||
+      process.env.BARBERS_RESEND_FROM_EMAIL ||
+      ""
+  );
+  if (alt) return alt;
+  // Last known working verified sender on the Resend plan.
+  return "IFCDC Barbers <service@ifcdcbarbersapp.com>";
 }
 
 /** @deprecated Use {@link getMailFrom} */
